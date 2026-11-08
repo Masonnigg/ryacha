@@ -41,6 +41,8 @@ export function PartTimeline({ clips, recordings, segments, choice, edits, onEdi
   const [picker, setPicker] = useState(null); // { mode: 'replace' | 'delete' }
   const undo = useRef([]);
   const box = useRef(), wave = useRef(), video = useRef(), loop = useRef({ raf: 0, i: 0 });
+  // a clip deleted or a take replaced changes the clips: the selection (an index) would point at another one
+  useEffect(() => { setSel(null); setPicker(null); }, [clips.length]);
 
   // the clips as shown, with the edge being dragged
   const shown = useMemo(() => clips.map((c, i) => (drag && drag.i === i ? { ...c, [drag.side]: drag.ms } : c)), [clips, drag]);
@@ -48,7 +50,7 @@ export function PartTimeline({ clips, recordings, segments, choice, edits, onEdi
   const total = shown.reduce((s, c) => s + c.out - c.in, 0);
   const pxPerMs = total ? (zoom * Math.max(200, width - 6)) / total : 0;
   const recOf = (c) => recordings.find((r) => r.id === c.rec);
-  const edited = Object.keys(edits || {}).length > 0 || Object.keys(choice || {}).length > 0;
+  const edited = Object.keys(edits || {}).length > 0 || Object.values(choice || {}).some((v) => v !== 0);
 
   // the width to fill: the timeline's column (not the scrolling box, whose first measure can come before the page
   // has settled), measured right after layout and again whenever the column changes size
@@ -88,16 +90,21 @@ export function PartTimeline({ clips, recordings, segments, choice, edits, onEdi
     loop.current.i = p.i;
     setPlaying(true);
     await video.current.play().catch(() => {});
+    loop.current.wait = false;
     const step = () => {
       const v = video.current, i = loop.current.i, c = shown[i];
       if (!v || !c) return;
+      if (loop.current.wait) { loop.current.raf = requestAnimationFrame(step); return; } // the next rush is loading
       const now = v.currentTime * 1000;
       if (now >= c.out) {
         if (i + 1 >= shown.length) { setT(total); return stop(); }
         loop.current.i = i + 1;
         const n = shown[i + 1];
         if (n.media === c.media) v.currentTime = n.in / 1000;
-        else { show(starts[i + 1]).then(() => v.play().catch(() => {})); }
+        else {
+          loop.current.wait = true;
+          show(starts[i + 1]).then(() => { loop.current.wait = false; return v.play().catch(() => {}); });
+        }
       } else setT(starts[i] + Math.max(0, now - c.in));
       loop.current.raf = requestAnimationFrame(step);
     };
@@ -110,6 +117,7 @@ export function PartTimeline({ clips, recordings, segments, choice, edits, onEdi
   // ---------- thumbnails (asked once per rush and zoom, cached by the app) ----------
   useEffect(() => {
     if (!pxPerMs) return undefined;
+    let gone = false; // a newer cut or zoom asked again: this answer is dropped
     const timer = setTimeout(async () => {
       const wanted = {};
       shown.forEach((c) => {
@@ -118,9 +126,9 @@ export function PartTimeline({ clips, recordings, segments, choice, edits, onEdi
       });
       const got = {};
       for (const [media, times] of Object.entries(wanted)) got[media] = await kit.ads.thumbs(media, times).catch(() => []);
-      setThumbs(got);
+      if (!gone) setThumbs(got);
     }, 250);
-    return () => clearTimeout(timer);
+    return () => { gone = true; clearTimeout(timer); };
   }, [clips, Math.round(pxPerMs * 1e6)]);
   const thumbAt = (media, ms) => {
     const list = thumbs[media];

@@ -325,6 +325,11 @@ function Review({ job, setJob, parts, recs, ads, sel, setSel }) {
   // timeline edits: kept only while they sit on an edge of the AI's cut (a replaced take drops its own)
   const setEdits = (key, e) => setJob((j) => ({ ...j, edits: { ...j.edits, [key]: pruneEdits(e, parts[key].autoPieces, recs) }, ok: [...new Set([...(j.ok || []), key])] }));
   const restore = (key, snap) => setJob((j) => ({ ...j, edits: { ...j.edits, [key]: snap.edits }, choices: { ...j.choices, [key]: snap.choice } }));
+  // a take replaced (here or in the timeline) takes its own trims with it: they don't come back with it later
+  useEffect(() => {
+    const stale = Object.keys(job.edits || {}).filter((k) => parts[k] && Object.keys(pruneEdits(job.edits[k], parts[k].autoPieces, recs)).length !== Object.keys(job.edits[k] || {}).length);
+    if (stale.length) setJob((j) => ({ ...j, edits: { ...j.edits, ...Object.fromEntries(stale.map((k) => [k, pruneEdits(j.edits[k], parts[k].autoPieces, recs)])) } }));
+  }, [parts]);
   const resetPart = (key) => setJob((j) => {
     const edits = { ...(j.edits || {}) }, choices = { ...(j.choices || {}) };
     delete edits[key]; delete choices[key];

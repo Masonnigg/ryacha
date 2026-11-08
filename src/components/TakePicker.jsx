@@ -45,7 +45,23 @@ function PlayPieces({ pieces }) {
 
 /** What deleting sentence i does from this clip: the whole sentence (-1), or only the clip's part of it. */
 export function removeFromClip(sg, clip, recordings) {
-  return inClip(sg.now, sg.nowTrims, clip, recordings).whole ? -1 : swapInClip(sg.now, sg.nowTrims, clip, recordings);
+  const m = inClip(sg.now, sg.nowTrims, clip, recordings);
+  return m.whole || !m.ids.length ? -1 : swapInClip(sg.now, sg.nowTrims, clip, recordings);
+}
+
+/** One take in the list: listen, then use it. A component of its own: defined inside TakePicker it would be a new
+ * component at every render (each key typed in the search) and its player would stop. */
+function Row({ label, text, pieces, current, sub, onUse }) {
+  return (
+    <li className={`flex items-center gap-2 rounded-md px-2 py-1.5 ${current ? 'bg-accent/10' : 'hover:bg-panel'}`}>
+      <PlayPieces pieces={pieces} />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[12.5px]" title={text}>{text}</div>
+        <div className="text-[11px] text-faint">{label}{sub ? ` · ${sub}` : ''}</div>
+      </div>
+      {current ? <span className="text-[11px] text-accent">utilisée</span> : <button className="btn h-7" onClick={onUse}>Utiliser</button>}
+    </li>
+  );
 }
 
 export function TakePicker({ mode, clip, sentences, segments, choice, recordings, onChoose, onClose }) {
@@ -54,8 +70,8 @@ export function TakePicker({ mode, clip, sentences, segments, choice, recordings
   const now = seg !== null ? choice?.[seg] || 0 : 0;
   const mine = (i) => inClip(segments[i].now, segments[i].nowTrims, clip, recordings); // the clip's part of sentence i
   const part = useMemo(() => (seg !== null ? mine(seg) : null), [seg, segments, clip]);
-  const partial = !!part && !part.whole;
-  const said = (i) => { const m = mine(i); return m.whole ? textOf(segments[i], choice?.[i] || 0) : m.text; };
+  const partial = !!part && part.ids.length > 0 && !part.whole; // the clip holds part of the sentence, not all of it
+  const said = (i) => { const m = mine(i); return m.whole || !m.ids.length ? textOf(segments[i], choice?.[i] || 0) : m.text; };
   const [query, setQuery] = useState(seg !== null ? said(seg) : '');
   useEffect(() => { if (seg !== null) setQuery(said(seg)); }, [seg]);
   const hits = useMemo(() => (sg && query.trim() ? searchTakes(query, recordings, { limit: 10 }) : []), [query, sg, recordings]);
@@ -78,16 +94,6 @@ export function TakePicker({ mode, clip, sentences, segments, choice, recordings
     );
   }
 
-  const Row = ({ label, text, pieces, value, current, sub }) => (
-    <li className={`flex items-center gap-2 rounded-md px-2 py-1.5 ${current ? 'bg-accent/10' : 'hover:bg-panel'}`}>
-      <PlayPieces pieces={pieces} />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[12.5px]" title={text}>{text}</div>
-        <div className="text-[11px] text-faint">{label}{sub ? ` · ${sub}` : ''}</div>
-      </div>
-      {current ? <span className="text-[11px] text-accent">utilisée</span> : <button className="btn h-7" onClick={() => onChoose(seg, value)}>Utiliser</button>}
-    </li>
-  );
   const recName = (id) => recordings.find((r) => r.id === id)?.name || id;
   return (
     <div className="mt-3 rounded-lg border border-line bg-panel-2 p-3">
@@ -96,8 +102,8 @@ export function TakePicker({ mode, clip, sentences, segments, choice, recordings
         <button className="text-faint hover:text-ink" onClick={onClose} aria-label="Fermer"><X size={14} /></button>
       </div>
       <ul className="space-y-0.5">
-        <Row label="Prise de l’IA" sub={partial ? 'toute la phrase' : ''} text={sg.text} pieces={aiPieces} value={0} current={now === 0} />
-        {sg.alternatives.map((a, n) => <Row key={n} label={`Autre prise ${n + 1}`} sub={partial ? 'toute la phrase' : ''} text={a.text} pieces={a.pieces} value={n + 1} current={now === n + 1} />)}
+        <Row label="Prise de l’IA" sub={partial ? 'toute la phrase' : ''} text={sg.text} pieces={aiPieces} onUse={() => onChoose(seg, 0)} current={now === 0} />
+        {sg.alternatives.map((a, n) => <Row key={n} label={`Autre prise ${n + 1}`} sub={partial ? 'toute la phrase' : ''} text={a.text} pieces={a.pieces} onUse={() => onChoose(seg, n + 1)} current={now === n + 1} />)}
       </ul>
       <label className="mt-3 flex items-center gap-2 rounded-md border border-line bg-bg px-2">
         <Search size={13} className="text-faint" />
@@ -111,7 +117,7 @@ export function TakePicker({ mode, clip, sentences, segments, choice, recordings
           const cur = partial ? same(part.ids, h.phrases) && h.trims.every((t) => (sg.nowTrims || []).some((u) => same(u, t)))
             : typeof now === 'object' && same(now.phrases, h.phrases) && same(now.trims || [], h.trims);
           const value = partial ? swapInClip(sg.now, sg.nowTrims, clip, recordings, put) : put;
-          return <Row key={h.phrases.join() + JSON.stringify(h.trims)} label={recName(h.rec)} sub={clock(h.at)} text={h.text} pieces={piecesFromPhrases(h.phrases, recordings, false, h.trims).pieces} value={value} current={cur} />;
+          return <Row key={h.phrases.join() + JSON.stringify(h.trims)} label={recName(h.rec)} sub={clock(h.at)} text={h.text} pieces={piecesFromPhrases(h.phrases, recordings, false, h.trims).pieces} onUse={() => onChoose(seg, value)} current={cur} />;
         })}
         {query.trim() && !hits.length && <li className="px-2 py-1.5 text-[12px] text-faint">Rien de proche dans les rushes.</li>}
       </ul>

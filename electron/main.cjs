@@ -837,7 +837,8 @@ ipcMain.handle('ads:thumbs', async (_e, filePath, times) => {
   const dir = path.join(adsCacheDir(), 'thumbs');
   fs.mkdirSync(dir, { recursive: true });
   const key = adsCacheKey(filePath);
-  const wanted = [...new Set((times || []).slice(0, 200).map((t) => Math.max(0, Math.round(t / 250) * 250)))];
+  // at most 600 frames per call, counted after rounding to 250 ms (a long part zoomed in still gets all its own)
+  const wanted = [...new Set((times || []).map((t) => Math.max(0, Math.round(t / 250) * 250)))].slice(0, 600);
   const out = [];
   for (let i = 0; i < wanted.length; i += 3) {
     await Promise.all(wanted.slice(i, i + 3).map(async (ms) => {

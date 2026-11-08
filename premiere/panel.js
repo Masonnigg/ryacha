@@ -164,6 +164,17 @@
   }
 
   // A command, with its output lines for progress (onLine) → stdout.
+  // how many sound streams a file has, from ffmpeg's banner (asked once per file)
+  const streamCount = new Map();
+  const audioStreams = (ffmpegPath, file) => new Promise((resolve) => {
+    if (streamCount.has(file)) return resolve(streamCount.get(file));
+    let err = '';
+    const p = spawn(ffmpegPath, ['-hide_banner', '-nostdin', '-i', file]);
+    p.stderr.on('data', (d) => { err += d; });
+    p.on('error', () => resolve(-1));
+    p.on('close', () => { const n = (err.match(/Stream #\d+:\d+[^\n]*: Audio:/g) || []).length; streamCount.set(file, n); resolve(n); });
+  });
+
   function run(cmd, args, { env, onLine } = {}) {
     return new Promise((resolve, reject) => {
       const p = spawn(cmd, args, { env: Object.assign({}, process.env, env || {}) });
@@ -478,7 +489,12 @@
         // leaves this panel empty while it lasts); Premiere renders it only when ffmpeg can't copy it exactly
         at(0.02, 'lecture de la coupe…');
         const cut = await host('pubs_audioCut', p.index);
-        const args = !cut.error && cut.plain ? lib.audioCutArgs(cut, wav) : null;
+        let args = !cut.error && cut.plain ? lib.audioCutArgs(cut, wav) : null;
+        // a file with several sound streams (camera mic + lav): the clip may use any of them, ffmpeg the first only
+        if (args) {
+          const counts = await Promise.all([...new Set(cut.clips.map((c) => c.media))].map((m) => audioStreams(tools.ffmpeg, m)));
+          if (counts.some((c) => c !== 1)) { args = null; cut.why = `un rush a ${Math.max(...counts)} pistes son`; }
+        }
         let ready = false;
         if (args) {
           at(0.05, 'préparation du son…');
