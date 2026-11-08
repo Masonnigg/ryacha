@@ -3,6 +3,7 @@ Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 var L = "A-Za-zÀ-ÖØ-öø-ÿŒœ";
 var APOS = "['’]";
 function fmtTime(ms) {
+	ms = Math.max(0, Math.round(ms));
 	const h = Math.floor(ms / 36e5);
 	const m = Math.floor(ms % 36e5 / 6e4);
 	const s = Math.floor(ms % 6e4 / 1e3);
