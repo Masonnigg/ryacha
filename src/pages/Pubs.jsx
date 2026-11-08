@@ -200,13 +200,15 @@ function Setup({ job, setJob, scripts, run, onBrief, onFolder, onAnalyse }) {
         {scripts.length > 0 && (
           <div className="mt-4 flex flex-wrap gap-1.5">
             {scripts.map((s) => (
-              <button key={s.id} onClick={() => setJob((j) => ({ ...j, scriptId: s.id }))} title={s.title}
+              <button key={s.id} onClick={() => setJob((j) => ({ ...j, scriptId: s.id }))} title={s.doubt ? `${s.title} · à vérifier : ${s.doubt}` : s.title}
                 className={`rounded-lg border px-2.5 py-1 text-[12.5px] transition-colors ${job.scriptId === s.id ? 'border-accent bg-accent/10 text-ink' : 'border-line text-mute hover:border-line-2 hover:text-ink'}`}>
                 <b>{s.id}</b> <span className="text-faint">{s.title.slice(0, 32)}</span>
+                {s.doubt && <AlertTriangle size={12} className="ml-1 inline align-[-2px] text-warn" aria-label={`À vérifier : ${s.doubt}`} />}
               </button>
             ))}
           </div>
         )}
+        {(() => { const d = scripts.find((s) => s.id === job?.scriptId)?.doubt; return d ? <p className="mt-2 text-[12px] text-warn">{job.scriptId} à vérifier dans le brief : {d}</p> : null; })()}
       </section>
       <section className={`card p-5 ${over === 'folder' ? 'ring-1 ring-accent' : ''}`} {...drop('folder')}>
         <div className="flex items-center gap-3">
@@ -344,7 +346,8 @@ function Review({ job, setJob, parts, recs, ads, sel, setSel }) {
   const script = job.script;
   const okSet = new Set(job.ok || []);
   const keys = Object.keys(parts);
-  const warn = (k) => parts[k].confidence === 'check' && !okSet.has(k);
+  // a number that differs from the script stays flagged even on an approved part (one wrong click in the takes list)
+  const warn = (k) => (parts[k].confidence === 'check' && !okSet.has(k)) || parts[k].mismatch?.length > 0;
   const current = sel && parts[sel] ? sel : keys.find(warn) || keys[0];
   const flagged = keys.filter(warn).length;
   const off = new Set(job.adsOff || []);
@@ -438,6 +441,9 @@ function PartDetail({ k, title, part, choice, ok, onChoose, onOk, recs, edits, o
         </div>
         {part.confidence === 'check' && !ok && <button className="btn h-8" onClick={onOk}><Check size={13} /> C’est bon</button>}
       </div>
+      {ok && part.mismatch?.length > 0 && (
+        <ul className="mt-3 space-y-1 text-[12.5px] text-warn">{part.mismatch.map((f, i) => <li key={i} className="flex gap-1.5"><AlertTriangle size={13} className="mt-0.5 shrink-0" />{f}</li>)}</ul>
+      )}
       {part.flags.length > 0 && !ok && (
         <ul className="mt-3 space-y-1 text-[12.5px] text-warn">{part.flags.map((f, i) => <li key={i} className="flex gap-1.5"><AlertTriangle size={13} className="mt-0.5 shrink-0" />{f}</li>)}</ul>
       )}

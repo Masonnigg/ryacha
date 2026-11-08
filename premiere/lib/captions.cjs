@@ -90,7 +90,7 @@ var BOUNDARY_RULES = [
 		type: "hyphen",
 		name: "Trait d’union (moment-là, peut-être…)",
 		apply(A, B) {
-			const startsWithSuffix = new RegExp(`^-[${L}]`).test(B);
+			const startsWithSuffix = /^-[a-zà-öø-ÿœ]/.test(B);
 			const endsWithHyphen = new RegExp(`[${L}]-$`).test(A);
 			if (!startsWithSuffix && !(endsWithHyphen && new RegExp(`^[${L}]`).test(B))) return null;
 			if (!new RegExp(`[${L}]-?$`).test(A)) return null;

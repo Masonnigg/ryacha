@@ -29,11 +29,23 @@ export function findScripts(text, fallbackId = 'Script') {
   const best = new Map();
   hits.forEach((m, i) => { const id = m[1].toUpperCase(); if (!best.has(id) || length(i) > length(best.get(id))) best.set(id, i); });
   hits = hits.filter((m, i) => best.get(m[1].toUpperCase()) === i);
-  return hits.map((m, i) => ({
-    id: m[1].toUpperCase(),
-    title: m[2].trim(),
-    text: text.slice(m.index, i + 1 < hits.length ? hits[i + 1].index : text.length).trim(),
-  }));
+  const bodies = hits.map((m, i) => text.slice(m.index, i + 1 < hits.length ? hits[i + 1].index : text.length).trim());
+  return hits.map((m, i) => ({ id: m[1].toUpperCase(), title: m[2].trim(), text: bodies[i], doubt: scriptDoubt(bodies[i], bodies[i - 1]) }));
+}
+
+/**
+ * Why a section might not be what it seems (shown next to it in the menu, never decided for the editor): no hook
+ * in it (a script to generate, notes), or hooks that carry on exactly where the section before stopped — what a
+ * line inside a script such as "S2 - reprendre l'accroche 3" leaves when it is taken for a heading. A script
+ * that simply starts at another number (reusing some hooks of another one) is left alone. → text, or ''.
+ */
+const hookNumbers = (body) => [...String(body || '').matchAll(/^\s*(?:acc(?:roche)?|hook)\s*(\d+)/gim)].map((m) => +m[1]);
+export function scriptDoubt(body, before) {
+  const nums = hookNumbers(body);
+  if (!nums.length) return 'aucune accroche : pas un script pour l’onglet Pubs ?';
+  const prev = hookNumbers(before);
+  if (nums[0] > 1 && prev.length && prev[prev.length - 1] === nums[0] - 1) return `reprend à l’accroche ${nums[0]}, juste après la fin du passage d’avant : un script coupé en deux ?`;
+  return '';
 }
 
 const LINE = {

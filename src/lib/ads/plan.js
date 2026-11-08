@@ -114,6 +114,13 @@ const reviewName = (script, v) => (several(script) ? `${script.script}${vtag(scr
  * Clips are in seconds on each recording; a clip { seq } nests a part sequence.
  */
 export function buildJob({ script, parts, live, media }) {
+  // every clip's rush is in the job, even one missing from the list given (a clip without its file can't be built)
+  media = [...media];
+  for (const part of Object.values(parts)) {
+    for (const p of part?.pieces || []) {
+      if (p.media && !media.some((m) => m.path === p.media)) media.push({ path: p.media, name: p.media.split('/').pop() });
+    }
+  }
   const mediaIds = new Map(media.map((m, i) => [m.path, `M${i + 1}`]));
   const clipsOf = (key) => (parts[key]?.pieces || []).map((p) => ({ media: mediaIds.get(p.media), in: p.in / 1000, out: p.out / 1000 }));
   const used = new Set(live.flatMap((a) => [`${a.variant}|${a.hook}`, a.transi && `${a.variant}|${a.transi}`, a.corps && `${a.corpsVariant}|${a.corps}`]).filter(Boolean));

@@ -203,6 +203,54 @@ export function piecesFromPhrases(ids, recordings, fine = false, trims = []) {
   return { pieces, removed, text: text.join(' '), missed };
 }
 
+// a small number said in words ("cinq soirs" for "5 soirs"): Whisper writes either
+const UNITS = ['zero', 'un', 'deux', 'trois', 'quatre', 'cinq', 'six', 'sept', 'huit', 'neuf', 'dix', 'onze', 'douze', 'treize', 'quatorze', 'quinze', 'seize', 'dix sept', 'dix huit', 'dix neuf'];
+const TENS = { 20: 'vingt', 30: 'trente', 40: 'quarante', 50: 'cinquante', 60: 'soixante', 80: 'quatre vingt' };
+function numberWords(n) {
+  if (n < 20) return UNITS[n];
+  if (n === 100) return 'cent';
+  if (n === 1000) return 'mille';
+  if (n > 99) return null;
+  if (n >= 70 && n < 80) return `soixante ${n === 71 ? 'et onze' : UNITS[n - 60]}`;
+  if (n >= 90) return `quatre vingt ${UNITS[n - 80]}`;
+  const t = Math.floor(n / 10) * 10, u = n % 10;
+  return u === 0 ? TENS[t] : `${TENS[t]} ${u === 1 && t !== 80 ? 'et un' : UNITS[u]}`;
+}
+const saidInWords = (n, tokens) => { const w = numberWords(+n); return !!w && expand(w).every((t) => tokens.includes(t)); };
+// numbers as one token each ("10 000" → "10000"), then the spelling-free tokens
+const numberTokens = (text) => expand(String(text).replace(/(\d)[\s\u00a0\u202f](?=\d{3}\b)/g, '$1')).filter((t) => /^\d+$/.test(t));
+function inOrderCount(want, have) {
+  const dp = new Array(have.length + 1).fill(0);
+  for (let i = 1; i <= want.length; i++) {
+    let prev = 0;
+    for (let j = 1; j <= have.length; j++) {
+      const keep = dp[j];
+      dp[j] = want[i - 1] === have[j - 1] ? prev + 1 : Math.max(dp[j], dp[j - 1]);
+      prev = keep;
+    }
+  }
+  return dp[have.length];
+}
+
+/**
+ * A take said against its script → flags for the review (none when it fits):
+ *  - a number of the script (a year, an age, a price) that the take says differently: the classic wrong pick when
+ *    hooks differ only by their number (only when the take has numbers of its own to compare);
+ *  - wording far from the script (less than 60 % of its words, in order) when wording = true.
+ */
+export function takeVsScript(script, take, { wording = true } = {}) {
+  const flags = [];
+  const want = numberTokens(script), have = numberTokens(take), said = expand(take);
+  const missing = [...new Set(want.filter((n) => !have.includes(n) && !saidInWords(n, said)))];
+  if (missing.length && have.length) flags.push(`Chiffre différent du script : ${missing.join(', ')} attendu, la prise dit ${[...new Set(have)].join(', ')}`);
+  const sw = expand(script), tw = expand(take);
+  if (wording && sw.length >= 4) {
+    const share = inOrderCount(sw, tw) / sw.length;
+    if (share < 0.6) flags.push(`La prise ne dit qu’environ ${Math.round(share * 100)} % du script : vérifie-la`);
+  }
+  return flags;
+}
+
 /**
  * Everything matched → { [key]: { pieces, text, confidence, note, flags, removed, segments: [{ text, alternatives: [{ pieces, text }] }] } }
  * takes = Claude's parsed reply for the spoken parts; opts.loose = keep a testimonial's own words between quote
@@ -218,7 +266,8 @@ export function matchParts(script, recordings, takes, opts = {}) {
     for (const p of [...v.hooks, ...v.transis, ...v.corps]) {
       const key = `${v.id}|${p.id}`;
       const choice = choices[key] || {}; // { segmentIndex: attempt (0 = chosen take) }
-      const res = { pieces: [], text: [], flags: [], removed: [], confidence: 'sure', note: '', segments: [], script: partText(p) };
+      // mismatch: what the take says against the script (a number above all): shown even once the part is approved
+      const res = { pieces: [], text: [], flags: [], mismatch: [], removed: [], confidence: 'sure', note: '', segments: [], script: partText(p) };
       let spokenDone = false;
       for (const l of p.lines) {
         if (l.kind === 'quote') {
@@ -275,6 +324,13 @@ export function matchParts(script, recordings, takes, opts = {}) {
           res.text.push(main.text);
           res.removed.push(...main.removed);
           if (t.confidence === 'check') { res.confidence = 'check'; res.flags.push(t.note); } else res.note = t.note;
+          // the take as it is now, said against the script: what the AI (or a switch) can get wrong without noticing
+          const removed = segs.some((_, i) => choice[i] === -1); // sentences taken out on purpose: wording can't compare
+          for (const f of takeVsScript(p.lines.filter((l) => l.kind === 'spoken').map((l) => l.text).join(' '), main.text, { wording: !removed })) {
+            res.confidence = 'check';
+            res.flags.push(f);
+            if (f.startsWith('Chiffre')) res.mismatch.push(f);
+          }
         }
       }
       res.text = res.text.join(' ');

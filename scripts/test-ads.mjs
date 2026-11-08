@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import pubsLib from '../premiere/lib/pubs.cjs';
 import panelCaptions from '../premiere/lib/captions.cjs';
-import { trimPhrase, recordingFrom, matchParts } from '../src/lib/ads/takes.js';
+import { trimPhrase, recordingFrom, matchParts, takeVsScript } from '../src/lib/ads/takes.js';
 import { clipsOf, applyEdits, snapEdge, setEdge, pruneEdits, limits, searchTakes, inClip, swapInClip, FRAME, MIN_CLIP } from '../src/lib/ads/edits.js';
 import { expand, prepWords, phrases, speechMask, levelTrack, piecesFor, cleanDisfluencies, quoteWords, noRepeats, BODY_GAP, sayWords } from '../src/lib/ads/cut.js';
 
@@ -172,6 +172,12 @@ test('brief: a line inside a script naming another script ("S2 - …") does not 
   assert.match(s.find((x) => x.id === 'S3').text, /S2 - reprendre[\s\S]*Acc2 : encore/);
 });
 
+test('brief: a section that looks cut out of another script is flagged, never merged', () => {
+  const s = findScripts('S1 : Premier\nAcc1 : un\nAcc2 : deux\nS4 - voir avec le client\nAcc3 : trois\nS2 : Second\nAcc1 : salut\nS3 : Notes\nRien à dire');
+  assert.deepEqual(s.map((x) => [x.id, x.doubt ? 'doute' : '']), [['S1', ''], ['S4', 'doute'], ['S2', ''], ['S3', 'doute']]);
+  assert.match(s[1].doubt, /accroche 3/);
+});
+
 test('brief: scripts found by their "S<n> :" headings', () => {
   const s = findScripts('Intro\nS1 : Un essai\nAcc1 : bonjour\nS2 – Autre chose\nAcc1 : salut');
   assert.deepEqual(s.map((x) => [x.id, x.title]), [['S1', 'Un essai'], ['S2', 'Autre chose']]);
@@ -243,6 +249,25 @@ const rush = (id, text, start = 1000) => {
   const raw = say(text, { start });
   return recordingFrom(id, { path: `/x/${id}.mov`, name: `${id}.mov` }, { words: raw, speech: speechOf(raw), duration: start + raw.length * 300 + 5000 });
 };
+
+test('take vs script: a different number is flagged, a number said in words is not', () => {
+  assert.deepEqual(takeVsScript('pour les gens nés en 1985', 'pour les gens nés en 1986'), ['Chiffre différent du script : 1985 attendu, la prise dit 1986']);
+  assert.deepEqual(takeVsScript('pendant 5 soirs, jusqu’à 20 000€', 'pendant cinq soirs jusqu’à 20 000 €'), []);
+  assert.deepEqual(takeVsScript('il a 21 ans', 'il a vingt et un ans'), []);
+  assert.deepEqual(takeVsScript('pour les gens nés en 1985', 'pour les gens nés en mille neuf cent'), []); // no digits to compare
+  assert.match(takeVsScript('on part demain matin et on rentre le soir', 'bonjour à tous merci')[0], /0 % du script/);
+  assert.deepEqual(takeVsScript('on part demain matin et on rentre le soir', 'bonjour', { wording: false }), []);
+});
+
+test('the job lists every rush its clips come from, even one missing from the media given', () => {
+  const sc = parseBriefReply({ script: 'S9', title: 't', notes: [], variants: [
+    { id: 'V1', name: '', hooks: [part('a')], transis: [], corps: [part('c1')], corps_from: '' },
+  ] }, 'S9');
+  const parts = { 'V1|H1': { pieces: [{ media: '/x/R2.mov', in: 0, out: 1000 }] }, 'V1|C1': { pieces: [{ media: '/x/R1.mov', in: 0, out: 2000 }] } };
+  const job = buildJob({ script: sc, parts, live: planAds(sc), media: [{ path: '/x/R1.mov', name: 'R1.mov' }] });
+  assert.deepEqual(job.media.map((m) => m.name), ['R1.mov', 'R2.mov']);
+  assert.ok(job.sequences.every((s) => (s.clips || []).every((c) => c.seq || c.media)));
+});
 
 test('two variants with the same name get distinct sequences, bins and folders', () => {
   const sc = parseBriefReply({ script: 'S9', title: 't', notes: [], variants: [

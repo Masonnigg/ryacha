@@ -127,7 +127,8 @@ const BOUNDARY_RULES = [
     name: 'Trait d’union (moment-là, peut-être…)',
     // "ce truc" | "-là."   or   "peut-" | "être"
     apply(A, B) {
-      const startsWithSuffix = new RegExp(`^-[${L}]`).test(B);
+      // a suffix goes on in lowercase ("-là", "-être"); "-Bonjour" is a dialogue line, not the end of a word
+      const startsWithSuffix = /^-[a-zà-öø-ÿœ]/.test(B);
       const endsWithHyphen = new RegExp(`[${L}]-$`).test(A);
       if (!startsWithSuffix && !(endsWithHyphen && new RegExp(`^[${L}]`).test(B))) return null;
       if (!new RegExp(`[${L}]-?$`).test(A)) return null;

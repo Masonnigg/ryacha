@@ -23,6 +23,7 @@ const cases = [
   [['t', "'es sûr"], ["t'es sûr"]],
   [["c' est le moment-la"], ["c'est le moment-là"]],
   [['moment -là'], ['moment-là']],
+  [['je te dis', '-Bonjour'], ['je te dis', '-Bonjour']],
   [['donne-la moi'], ['donne-la moi']],
   [['moi aujourd', "'hui j", "'ai envie"], ['moi', "aujourd'hui", "j'ai envie"]],
   [['(Transcribed by TurboScribe. Go Unlimited to remove this message.) Essayez vraiment'], ['Essayez vraiment']],
