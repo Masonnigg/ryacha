@@ -91,6 +91,17 @@
     } catch (e) {}
   }
   journal(`ouvert (${PANEL_VERSION}, ${window.innerWidth}×${window.innerHeight})`);
+  // sound files older versions left next to the captions (each part's WAV/MP3, only ever needed for Whisper)
+  try {
+    const caps = path.join(DATA, 'captions');
+    let gone = 0;
+    for (const d of fs.readdirSync(caps)) {
+      const dir = path.join(caps, d);
+      if (!fs.statSync(dir).isDirectory()) continue;
+      for (const f of fs.readdirSync(dir)) if (/\.(mp3|wav)$/i.test(f)) { fs.rmSync(path.join(dir, f), { force: true }); gone++; }
+    }
+    if (gone) journal(`${gone} anciens fichiers son des sous-titres supprimés`);
+  } catch (e) {}
   window.addEventListener('error', (e) => journal(`erreur : ${String(e.message).slice(0, 200)}`));
   window.addEventListener('beforeunload', () => journal('fermé ou rechargé'));
   document.addEventListener('visibilitychange', () => journal(document.visibilityState === 'visible' ? 'visible' : 'caché'));

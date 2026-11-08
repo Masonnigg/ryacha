@@ -9,6 +9,7 @@ import FourFive from './pages/FourFive.jsx';
 import Pubs from './pages/Pubs.jsx';
 import Settings from './pages/Settings.jsx';
 import { kit } from './lib/kit.js';
+import { ScreenGuard } from './components/ScreenGuard.jsx';
 import avatar from './assets/avatar.png?inline';
 
 const ToastCtx = createContext(() => {});
@@ -98,22 +99,22 @@ function Main() {
           <div className="drag absolute inset-x-0 top-0 h-[38px]" />
           {/* Transcrire, Hook, Pubs and 4x5 stay mounted so running jobs and edits survive tab switches */}
           <div className="h-full" hidden={page !== 'transcribe'}>
-            <Transcribe onSendToBroll={sendToBroll} onSendToFixer={sendToFixer} onSendToHook={sendToHook} />
+            <ScreenGuard name="Transcrire" store="transcribeSession"><Transcribe onSendToBroll={sendToBroll} onSendToFixer={sendToFixer} onSendToHook={sendToHook} /></ScreenGuard>
           </div>
           <div className="h-full" hidden={page !== 'hook'}>
-            <Hook active={page === 'hook'} input={hookInput} goSettings={() => go('settings')} goTranscribe={() => go('transcribe')} />
+            <ScreenGuard name="Hook" store="hookSession"><Hook active={page === 'hook'} input={hookInput} goSettings={() => go('settings')} goTranscribe={() => go('transcribe')} /></ScreenGuard>
           </div>
           <div className="h-full" hidden={page !== 'fourfive'}>
-            <FourFive />
+            <ScreenGuard name="4x5"><FourFive /></ScreenGuard>
           </div>
           <div className="h-full" hidden={page !== 'pubs'}>
-            <Pubs active={page === 'pubs'} />
+            <ScreenGuard name="Pubs" store="pubsJob"><Pubs active={page === 'pubs'} /></ScreenGuard>
           </div>
           <div className="h-full" key={page} hidden={page === 'transcribe' || page === 'hook' || page === 'fourfive' || page === 'pubs'}>
-            {page === 'palettes' && <Palettes />}
-            {page === 'srt' && <SrtFixer onSendToBroll={sendToBroll} input={fixerInput} />}
-            {page === 'broll' && <Broll input={brollInput} goSettings={() => go('settings')} />}
-            {page === 'settings' && <Settings />}
+            {page === 'palettes' && <ScreenGuard name="Palettes"><Palettes /></ScreenGuard>}
+            {page === 'srt' && <ScreenGuard name="SRT Fixer" store="srtSession"><SrtFixer onSendToBroll={sendToBroll} input={fixerInput} /></ScreenGuard>}
+            {page === 'broll' && <ScreenGuard name="B-roll" store="brollSession"><Broll input={brollInput} goSettings={() => go('settings')} /></ScreenGuard>}
+            {page === 'settings' && <ScreenGuard name="Réglages"><Settings /></ScreenGuard>}
           </div>
         </main>
       </div>

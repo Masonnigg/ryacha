@@ -43,6 +43,8 @@ export default function Pubs({ active }) {
           const loaded = await loadRecordings(files);
           // a rush moved, re-saved or re-transcribed since: the AI's takes and the trims point at other words now
           if (j.prints) setChanged(files.filter((_, i) => j.prints[i] && j.prints[i] !== transcriptPrint(loaded[i])).map((f) => f.name));
+          // a job analysed before fingerprints existed: today's transcripts become its baseline, checked from now on
+          else setJob((cur) => (cur && !cur.prints ? { ...cur, prints: loaded.map(transcriptPrint) } : cur));
           setRecs(loaded); setPhase('review'); setRun(null);
         } catch (e) { setPhase('setup'); setRun({ error: cleanErr(e) }); }
       }

@@ -831,7 +831,22 @@ const grabFrame = (ffmpeg, file, ms, out) => new Promise((resolve) => {
   p.on('error', () => resolve(false));
   p.on('close', (code) => resolve(code === 0 && fs.existsSync(out)));
 });
+// The timeline's thumbnails stay cached between sessions; past 300 MB the oldest go, down to 200 MB.
+let thumbCalls = 0;
+function pruneThumbs(max = 300e6, keep = 200e6) {
+  const dir = path.join(adsCacheDir(), 'thumbs');
+  let files;
+  try { files = fs.readdirSync(dir).map((n) => { const p = path.join(dir, n); const st = fs.statSync(p); return { p, size: st.size, t: st.mtimeMs }; }); } catch { return; }
+  let total = files.reduce((s, f) => s + f.size, 0);
+  if (total <= max) return;
+  for (const f of files.sort((a, b) => a.t - b.t)) {
+    if (total <= keep) break;
+    try { fs.rmSync(f.p, { force: true }); total -= f.size; } catch {}
+  }
+}
+app.whenReady().then(() => setTimeout(() => pruneThumbs(), 20000));
 ipcMain.handle('ads:thumbs', async (_e, filePath, times) => {
+  if (++thumbCalls % 100 === 0) pruneThumbs();
   const ffmpeg = findBin('ffmpeg');
   if (!ffmpeg || !fs.existsSync(filePath)) return [];
   const dir = path.join(adsCacheDir(), 'thumbs');

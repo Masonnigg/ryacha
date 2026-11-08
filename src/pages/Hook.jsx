@@ -5,6 +5,7 @@ import { kit } from '../lib/kit.js';
 import { wordsFromWhisper } from '../lib/transcribe.js';
 import { linesFromWords, buildHookRequest, parseHookReply, momentToText, fmtClock, hookEngineOf, CHATGPT_USAGE_URL } from '../lib/hook.js';
 import { premiereXml, parseProbe } from '../lib/premiere.js';
+import { availableEngines, engineLabel } from '../lib/ads/ai.js';
 import { Running, CopyLog } from './Transcribe.jsx';
 
 const MEDIA_RE = /\.(mp4|mov|m4v|mkv|webm|avi|mxf|mp3|wav|m4a|aac|flac|ogg|aif|aiff)$/i;
@@ -103,13 +104,23 @@ export default function Hook({ active, input, goSettings, goTranscribe }) {
     // ChatGPT = the person's own ChatGPT plan (Sign in with ChatGPT); Claude = Claude Code already connected on
     // this Mac; or an OpenAI API key
     const s = (await kit.store.get('settings', {})) || {};
-    const engine = hookEngineOf(s, (await kit.claude.status())?.loggedIn);
+    let engine = hookEngineOf(s, (await kit.claude.status())?.loggedIn);
     const model = s.model || 'sonnet';
-    update(job.key, { state: 'running', phase: 'analyze', engine, lines: lines.length, startedAt: Date.now() });
+    update(job.key, { state: 'running', phase: 'analyze', engine, lines: lines.length, startedAt: Date.now(), note: null });
     const req = buildHookRequest(lines, duration);
-    const r = engine === 'chatgpt' ? await kit.chatgpt.ask(req)
-      : engine === 'openai' ? await kit.openai.ask(req)
-      : await kit.claude.ask(req.user, model, { system: req.system, schema: req.schema });
+    const askWith = (e) => (e === 'chatgpt' ? kit.chatgpt.ask(req)
+      : e === 'openai' ? kit.openai.ask(req)
+      : kit.claude.ask(req.user, model, { system: req.system, schema: req.schema }));
+    let r = await askWith(engine);
+    // its login is gone (Claude Code's session expired, ChatGPT signed out): another AI connected here takes over
+    if (!r.ok && (r.code === 'claude-signin' || r.code === 'signin')) {
+      const other = (await availableEngines()).find((e) => e !== engine);
+      if (other) {
+        update(job.key, { engine: other, note: `${engineLabel(engine)} est déconnecté : ${engineLabel(other)} prend le relais` });
+        engine = other;
+        r = await askWith(other);
+      }
+    }
     if (r.ok && engine === 'claude') r.model = `Claude ${model}`;
     if (r.ok && engine === 'chatgpt') r.model = `ChatGPT ${r.model}`;
     if (!r.ok) {
@@ -268,6 +279,7 @@ function Analyzing({ job }) {
         <Loader2 className="mx-auto mb-3 animate-spin text-accent" />
         <div className="font-medium">{job.engine === 'claude' ? 'Claude' : 'ChatGPT'} cherche le hook…</div>
         <div className="mt-1 text-[11.5px] text-faint">{job.lines} phrases · {secs}s</div>
+        {job.note && <div className="mt-1 text-[11.5px] text-warn">{job.note}</div>}
         {job.engine === 'chatgpt' && <PlanNote className="mt-2 justify-center" />}
         <button className="btn btn-ghost mt-4" onClick={() => (job.engine === 'chatgpt' ? kit.chatgpt.cancel() : job.engine === 'openai' ? kit.openai.cancel() : kit.claude.cancel())}>Annuler</button>
       </div>
