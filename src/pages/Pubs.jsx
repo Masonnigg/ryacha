@@ -27,6 +27,7 @@ export default function Pubs({ active }) {
   const [run, setRun] = useState(null); // { step, note, pct, file, error }
   const [recs, setRecs] = useState(null); // recordings (words + sound), rebuilt from the engine cache
   const [sel, setSel] = useState(null);
+  const [changed, setChanged] = useState([]); // rushes transcribed again since the analysis: its takes no longer fit
   const restored = useRef(false);
 
   // restore the last job (the engine cache makes the transcripts instant)
@@ -37,7 +38,13 @@ export default function Pubs({ active }) {
       setJob(j);
       if (j.script && j.takes) {
         setPhase('running'); setRun({ step: 'restore' });
-        try { setRecs(await loadRecordings(j.media.filter((m) => m.on))); setPhase('review'); setRun(null); } catch (e) { setPhase('setup'); setRun({ error: cleanErr(e) }); }
+        try {
+          const files = j.media.filter((m) => m.on);
+          const loaded = await loadRecordings(files);
+          // a rush moved, re-saved or re-transcribed since: the AI's takes and the trims point at other words now
+          if (j.prints) setChanged(files.filter((_, i) => j.prints[i] && j.prints[i] !== transcriptPrint(loaded[i])).map((f) => f.name));
+          setRecs(loaded); setPhase('review'); setRun(null);
+        } catch (e) { setPhase('setup'); setRun({ error: cleanErr(e) }); }
       }
     });
     return kit.ads.onProgress((p) => setRun((r) => (r && r.step === 'transcribe' ? { ...r, pct: p.pct ?? r.pct, note: p.note ?? r.note } : r)));
@@ -103,7 +110,8 @@ export default function Pubs({ active }) {
       const spoken = spokenParts(parsed);
       const takes = spoken.length ? await askAI(buildTakesRequest(spoken, recordings), { onNote }) : { parts: [] };
       setRecs(recordings);
-      setJob((j) => ({ ...j, script: parsed, takes, choices: {}, edits: {}, adsOff: [] }));
+      setChanged([]);
+      setJob((j) => ({ ...j, script: parsed, takes, choices: {}, edits: {}, adsOff: [], prints: recordings.map(transcriptPrint) }));
       setPhase('review'); setRun(null); setSel(null);
     } catch (e) {
       setPhase('setup'); setRun({ error: cleanErr(e) });
@@ -117,7 +125,11 @@ export default function Pubs({ active }) {
     const media = job.media.filter((m) => m.on);
     const built = buildJob({ script: job.script, parts, live, media });
     await kit.ads.writeJob(built);
-    notify(`${live.length} pubs prêtes. Dans Premiere : Fenêtre › Extensions › RYACHA, puis suis les 4 étapes.`, { ms: 9000 });
+    // parts with no take become empty sequences in Premiere: fill them there, the panel won't export their ads empty
+    const empty = built.sequences.filter((s) => s.kind !== 'ad' && s.kind !== 'review' && !s.clips.length).map((s) => s.name);
+    notify(empty.length
+      ? `${live.length} pubs prêtes, mais ${empty.join(', ')} ${empty.length > 1 ? 'sont vides' : 'est vide'} (aucune prise trouvée) : remplis-${empty.length > 1 ? 'les' : 'la'} dans Premiere avant l’export.`
+      : `${live.length} pubs prêtes. Dans Premiere : Fenêtre › Extensions › RYACHA, puis suis les 4 étapes.`, { ms: 12000 });
   }
 
   const reset = () => { setJob(null); setRecs(null); setPhase('setup'); setRun(null); kit.store.set('pubsJob', null); };
@@ -126,18 +138,34 @@ export default function Pubs({ active }) {
     <div className="flex h-full flex-col">
       <PageHeader title="Pubs" sub="Le brief du client + les rushes → chaque accroche, transition et corps retrouvés dans les rushes, puis construits dans Premiere.">
         {phase === 'review' && <ResetButton onReset={reset} />}
-        {phase === 'review' && parts && <button className="btn btn-primary" onClick={sendToPremiere}><Hammer size={14} /> Construire dans Premiere</button>}
+        {phase === 'review' && parts && !changed.length && <button className="btn btn-primary" onClick={sendToPremiere}><Hammer size={14} /> Construire dans Premiere</button>}
       </PageHeader>
       <div className="flex min-h-0 flex-1 flex-col px-8 pb-6">
         {phase === 'running' ? <Progress run={run} />
           : phase === 'review' && parts ? (
-            <Review job={job} setJob={setJob} parts={parts} recs={recs} ads={ads} sel={sel} setSel={setSel} />
+            <>
+              {changed.length > 0 && (
+                <div className="mb-3 flex items-center gap-3 rounded-lg bg-warn/10 px-3 py-2 text-[12.5px] text-warn" role="alert">
+                  <AlertTriangle size={14} className="shrink-0" />
+                  <span className="flex-1">{changed.join(', ')} {changed.length > 1 ? 'ont changé' : 'a changé'} depuis l’analyse (déplacé, réenregistré ou retranscrit) : les prises choisies ne tombent plus sur les bons mots. Relance l’analyse avant de construire.</span>
+                  <button className="btn h-7" onClick={analyse}>Relancer l’analyse</button>
+                </div>
+              )}
+              <Review job={job} setJob={setJob} parts={parts} recs={recs} ads={ads} sel={sel} setSel={setSel} />
+            </>
           ) : (
             <Setup job={job} setJob={setJob} scripts={scripts} run={run} onBrief={loadBrief} onFolder={loadFolder} onAnalyse={analyse} />
           )}
       </div>
     </div>
   );
+}
+
+/** A transcript's fingerprint: its words and their times. Saved with the analysis, compared when the job reopens. */
+function transcriptPrint(rec) {
+  let h = 5381;
+  for (const w of rec.words) for (const ch of `${w.text}@${Math.round(w.s)}|`) h = ((h * 33) ^ ch.charCodeAt(0)) >>> 0;
+  return `${rec.words.length}:${h.toString(36)}`;
 }
 
 async function loadRecordings(files) {

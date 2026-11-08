@@ -10,11 +10,14 @@ import { expand } from './cut.js';
 
 const cap = (s) => `${s.charAt(0).toUpperCase()}${s.slice(1).toLowerCase()}`;
 const num = (id) => id.replace(/^\D+/, '');
-const vtag = (v) => (v.name ? cap(v.name) : v.id); // "V1", or the person's name for a testimonial variant
-const variantFolder = (v) => (v.name ? `Variante ${cap(v.name)}` : `Variante ${v.id.slice(1)}`);
+// two variants with the same name (two testimonials both called Marie) would make the same sequences in Premiere,
+// and the second would be skipped as already there: each such name also gets its variant number
+const sameName = (script, v) => !!v.name && script.variants.some((x) => x !== v && x.name && cap(x.name) === cap(v.name));
+const vtag = (script, v) => (v.name ? `${cap(v.name)}${sameName(script, v) ? ` ${v.id}` : ''}` : v.id); // "V1", or the person's name
+const variantFolder = (script, v) => (v.name ? `Variante ${vtag(script, v)}` : `Variante ${v.id.slice(1)}`);
 const several = (script) => script.variants.length > 1;
 /** The script's bin, and one sub-bin per variant when there are several ("S1 / S1 V1"). */
-const homeBin = (script, v) => (several(script) ? [script.script, `${script.script} ${vtag(v)}`] : [script.script]);
+const homeBin = (script, v) => (several(script) ? [script.script, `${script.script} ${vtag(script, v)}`] : [script.script]);
 
 /** The corps a variant uses: its own, or the ones of the variant it borrows from. */
 export const corpsOf = (script, v) => (v.corps.length ? v.corps : script.variants.find((x) => x.id === v.corpsFrom)?.corps || []);
@@ -56,7 +59,7 @@ export function planAds(script) {
       for (const c of cs) {
         for (const h of v.hooks) {
           const tail = [t && `T${num(t.id)}`, c && cs.length > 1 && `C${num(c.id)}`].filter(Boolean);
-          const name = [script.script, ...(several(script) ? [vtag(v)] : []), `H${num(h.id)}`, ...tail].join(' - ');
+          const name = [script.script, ...(several(script) ? [vtag(script, v)] : []), `H${num(h.id)}`, ...tail].join(' - ');
           // with several transis or corps, each combination gets its own sub-bin and export folder
           const group = t && transis.length > 1 ? `Transi ${num(t.id)}` : c && cs.length > 1 ? `Corps ${num(c.id)}` : '';
           ads.push({
@@ -67,7 +70,7 @@ export function planAds(script) {
             corps: c?.id || null,
             corpsVariant: c ? (v.corps.length ? v.id : v.corpsFrom) : null,
             bin: [...homeBin(script, v), 'Export', group].filter(Boolean),
-            folder: [script.script, ...(several(script) ? [variantFolder(v)] : []), group].filter(Boolean), // under <deliverables>/<format>/…
+            folder: [script.script, ...(several(script) ? [variantFolder(script, v)] : []), group].filter(Boolean), // under <deliverables>/<format>/…
             skip: t && repeats.has(`${v.id}|${h.id}|${t.id}`) ? `${h.id} et ${t.id} disent la même phrase` : null,
           });
         }
@@ -86,9 +89,9 @@ export function partSequences(script) {
   const S = script.script;
   for (const v of script.variants) {
     const home = homeBin(script, v);
-    const prefix = several(script) ? variantFolder(v) : S;
+    const prefix = several(script) ? variantFolder(script, v) : S;
     for (const h of v.hooks) {
-      const name = several(script) ? `${S}${vtag(v)} - H${num(h.id)}` : `${S}H${num(h.id)}`;
+      const name = several(script) ? `${S}${vtag(script, v)} - H${num(h.id)}` : `${S}H${num(h.id)}`;
       out.push({ key: `${v.id}|${h.id}`, name, bin: [...home, 'Hooks'], variant: v.id, part: h.id, kind: 'hook' });
     }
     for (const t of v.transis) {
@@ -103,7 +106,7 @@ export function partSequences(script) {
 }
 
 /** The client review sequence of a variant: every hook back to back, then each transi, then the corps. */
-const reviewName = (script, v) => (several(script) ? `${script.script}${vtag(v)} - Full Timeline Review` : `${script.script} - Full Timeline Review`);
+const reviewName = (script, v) => (several(script) ? `${script.script}${vtag(script, v)} - Full Timeline Review` : `${script.script} - Full Timeline Review`);
 
 /**
  * Everything Premiere needs to build the project → the job file the RYACHA panel reads.

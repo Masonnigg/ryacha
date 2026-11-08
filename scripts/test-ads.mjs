@@ -236,6 +236,17 @@ const rush = (id, text, start = 1000) => {
   return recordingFrom(id, { path: `/x/${id}.mov`, name: `${id}.mov` }, { words: raw, speech: speechOf(raw), duration: start + raw.length * 300 + 5000 });
 };
 
+test('two variants with the same name get distinct sequences, bins and folders', () => {
+  const sc = parseBriefReply({ script: 'S9', title: 't', notes: [], variants: [
+    { id: 'V1', name: 'MARIE', hooks: [part('a')], transis: [], corps: [part('c')], corps_from: '' },
+    { id: 'V2', name: 'Marie', hooks: [part('b')], transis: [], corps: [], corps_from: 'V1' },
+  ] }, 'S9');
+  const ads = planAds(sc);
+  assert.equal(new Set(ads.map((a) => a.name)).size, ads.length);
+  assert.deepEqual(ads.map((a) => a.name), ['S9 - Marie V1 - H1', 'S9 - Marie V2 - H1']);
+  assert.notDeepEqual(ads[0].folder, ads[1].folder);
+});
+
 test('timeline: edges are named by their word, an edit moves one and goes when it is back', () => {
   const r = rush('R1', 'on part demain matin. et on rentre le soir.');
   const pieces = [{ media: '/x/R1.mov', in: 980, out: 2190 }, { media: '/x/R1.mov', in: 2180, out: 3690 }];

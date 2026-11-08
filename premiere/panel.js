@@ -322,6 +322,7 @@
     const e = einfo[p.index];
     if (e && !e.present) return ['tag missing', 'pas dans le projet'];
     if (fs.existsSync(p.out)) return ['tag missing', 'déjà exportée'];
+    if (e && e.empty && e.empty.length) return ['tag missing', `${e.empty[0]} vide`];
     if (p.format === '4x5' && e && !e.has4x5) return ['tag warn', '4x5 à créer'];
     return null;
   }
@@ -572,8 +573,8 @@
       else { try { learned = JSON.parse(fs.readFileSync(styleCache(uid), 'utf8')); } catch (e) { learned = lib.styleFromFile(styleXml); } }
       const r = lib.styleCaptionTracks(xml, styleXml, names, learned);
       fs.writeFileSync(c.path, zlib.gzipSync(Buffer.from(r.xml, 'utf8')));
-      if (r.captions) log(`✓ Style « ${name} » sur ${r.captions} sous-titres (${plural(r.tracks, 'partie')})`, 'ok');
-      else log(`Style « ${name} » lié aux ${plural(r.tracks, 'partie')}, mais ce style n’a pas pu être lu : pose-le à la main sur une partie, puis clique « Appliquer ».`, 'warn');
+      if (r.captions) log(`✓ Style « ${name} » sur ${r.captions} sous-titres (${plural(r.parts, 'partie')})`, 'ok');
+      else log(`Style « ${name} » lié aux ${plural(r.parts, 'partie')}, mais ce style n’a pas pu être lu : pose-le à la main sur une partie, puis clique « Appliquer ».`, 'warn');
     } catch (e) {
       log(`Style : ${e.message}`, 'warn');
     } finally {
@@ -897,6 +898,7 @@
       const e = einfo[p.index];
       if (!e || !e.present) { skipped++; log(`= ${p.name} pas dans le projet`, 'skip'); continue; }
       if (fs.existsSync(p.out)) { skipped++; log(`= ${label} déjà exportée, pas écrasée`, 'skip'); continue; }
+      if (e.empty && e.empty.length) { failed++; log(`✗ ${label} : ${e.empty.join(', ')} ${e.empty.length > 1 ? 'sont vides' : 'est vide'} dans le projet (aucune prise) : remplis-${e.empty.length > 1 ? 'les' : 'la'}, puis exporte`, 'err'); continue; }
       if (p.format === '4x5' && !e.has4x5) {
         const m = await host('pubs_make4x5', p.index);
         if (m.error) { failed++; log(`✗ ${label} : ${m.error}`, 'err'); continue; }

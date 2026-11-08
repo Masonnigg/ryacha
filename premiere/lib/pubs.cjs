@@ -347,7 +347,7 @@ function styleCaptionTracks(xml, styleXml, names, learned) {
     written.add(h);
     return `<${tag} Encoding="base64" BinaryHash="${h}">${data.toString('base64')}</${tag}>`;
   });
-  return { xml: out, tracks: tracks.length, captions };
+  return { xml: out, tracks: tracks.length, parts: new Set(tracks.map((t) => t.name)).size, captions }; // a part can hold several caption tracks
 }
 
 /**

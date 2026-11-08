@@ -505,7 +505,17 @@ function pubs_exportInfo(file) {
       var kind = s.kind || (String(s.key).indexOf('ad:') === 0 ? 'ad' : String(s.key).indexOf('review:') === 0 ? 'review' : 'part');
       if (kind !== 'ad' && kind !== 'review') continue;
       var b4 = pubsFindBin(pubsBin4x5(s.bin));
-      out.push({ index: i, name: s.name, kind: kind, present: !!pubsJobSequence(s), has4x5: !!(b4 && pubsFindSequence(s.name + ' 4x5', b4)) });
+      // its parts still empty in the project (no take was found, nobody filled them): an ad must not go out without them
+      var empty = [];
+      for (var k = 0; s.clips && k < s.clips.length; k++) {
+        if (!s.clips[k].seq) continue;
+        for (var j = 0; j < pubsJob.sequences.length; j++) {
+          if (pubsJob.sequences[j].key !== s.clips[k].seq) continue;
+          var part = pubsJobSequence(pubsJob.sequences[j]);
+          if (part && !(parseFloat(part.end) > 0)) empty.push(pubsJob.sequences[j].name);
+        }
+      }
+      out.push({ index: i, name: s.name, kind: kind, present: !!pubsJobSequence(s), has4x5: !!(b4 && pubsFindSequence(s.name + ' 4x5', b4)), empty: empty });
     }
     return pubsJson({ sequences: out });
   } catch (e) { return pubsFail(e); }
