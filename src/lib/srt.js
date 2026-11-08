@@ -14,6 +14,7 @@ export function toMs(h, m, s, ms) {
 }
 
 export function fmtTime(ms) {
+  ms = Math.max(0, Math.round(ms)); // whole milliseconds: "00:00:01,500.5" is not an SRT time
   const h = Math.floor(ms / 3600000);
   const m = Math.floor((ms % 3600000) / 60000);
   const s = Math.floor((ms % 60000) / 1000);

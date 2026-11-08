@@ -164,6 +164,14 @@ test('no sentence twice: a false start is trimmed, a full retake dropped', () =>
 const { findScripts, parseBriefReply } = await import('../src/lib/ads/brief.js');
 const { planAds, partSequences } = await import('../src/lib/ads/plan.js');
 
+test('brief: a line inside a script naming another script ("S2 - …") does not cut it', () => {
+  const brief = 'S1 : Premier\nAcc1 : bonjour\nAcc2 : salut\nAcc3 : coucou\nAcc4 : hello\nS2 : Second\nAcc1 : un\nAcc2 : deux\nAcc3 : trois\nS3 : Troisième\nAcc1 : alors\nS2 - reprendre l’accroche 3\nAcc2 : encore';
+  const s = findScripts(brief);
+  assert.deepEqual(s.map((x) => x.id), ['S1', 'S2', 'S3']);
+  assert.match(s.find((x) => x.id === 'S2').text, /Acc3 : trois/);
+  assert.match(s.find((x) => x.id === 'S3').text, /S2 - reprendre[\s\S]*Acc2 : encore/);
+});
+
 test('brief: scripts found by their "S<n> :" headings', () => {
   const s = findScripts('Intro\nS1 : Un essai\nAcc1 : bonjour\nS2 – Autre chose\nAcc1 : salut');
   assert.deepEqual(s.map((x) => [x.id, x.title]), [['S1', 'Un essai'], ['S2', 'Autre chose']]);

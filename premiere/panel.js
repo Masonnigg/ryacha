@@ -405,7 +405,25 @@
     paint();
   }
 
+  // The project the panel works for is Premiere's active one: with several open, the editor can switch at any time,
+  // and the panel would keep the other one's deliverables folder, style and progress while acting on this one.
+  let watching = false;
+  async function followProject() {
+    if (busy || watching) return false;
+    watching = true;
+    try {
+      const info = await host('pubs_info');
+      const now = info.error ? null : info.path;
+      if (now !== (project ? project.path : null)) { journal(`projet actif : ${info.project || 'aucun'}`); await refresh(); return true; }
+    } catch (e) {} finally { watching = false; }
+    return false;
+  }
+  setInterval(() => { if (document.visibilityState === 'visible') followProject(); }, 4000);
+  window.addEventListener('focus', () => followProject());
+
   async function task(stepIndex, fn) {
+    if (!job || busy) return;
+    await followProject(); // the right project's settings, even if the switch happened a second ago
     if (!job || busy) return;
     busy = true;
     openStep = stepIndex;
@@ -491,6 +509,8 @@
         // leaves this panel empty while it lasts); Premiere renders it only when ffmpeg can't copy it exactly
         at(0.02, 'lecture de la coupe…');
         const cut = await host('pubs_audioCut', p.index);
+        // an empty part (no take found, not filled yet): nothing to say, nothing to caption
+        if (!cut.error && !(cut.clips || []).length) { log(`= ${p.name} : vide (aucune prise), pas de sous-titres`, 'skip'); continue; }
         let args = !cut.error && cut.plain ? lib.audioCutArgs(cut, wav) : null;
         // a file with several sound streams (camera mic + lav): the clip may use any of them, ffmpeg the first only
         if (args) {

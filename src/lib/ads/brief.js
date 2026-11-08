@@ -21,8 +21,14 @@ export async function pdfText(data) {
  */
 export function findScripts(text, fallbackId = 'Script') {
   const re = /^\s*(S\d{1,3})\s*[:–-]\s*(.+)$/gm;
-  const hits = [...text.matchAll(re)];
+  let hits = [...text.matchAll(re)];
   if (!hits.length) return [{ id: fallbackId, title: '', text: text.trim() }];
+  // the same "S2 - …" twice: one is the script's heading, the other a line inside another script that names it
+  // ("S2 - reprendre l'accroche 3"). The heading is the one followed by the most text; the other doesn't cut.
+  const length = (i) => (i + 1 < hits.length ? hits[i + 1].index : text.length) - hits[i].index;
+  const best = new Map();
+  hits.forEach((m, i) => { const id = m[1].toUpperCase(); if (!best.has(id) || length(i) > length(best.get(id))) best.set(id, i); });
+  hits = hits.filter((m, i) => best.get(m[1].toUpperCase()) === i);
   return hits.map((m, i) => ({
     id: m[1].toUpperCase(),
     title: m[2].trim(),

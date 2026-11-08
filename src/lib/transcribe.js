@@ -16,9 +16,10 @@ export async function srtTarget(job, exists, taken = new Set()) {
   if (job.savedTo) return job.savedTo;
   const base = job.path.replace(/\.[^./]+$/, '');
   if (!taken.has(`${base}.srt`) && !(await exists(`${base}.srt`))) return `${base}.srt`;
+  // an earlier RYACHA export of the same media is never replaced either (it may have been corrected by hand since)
   for (let n = 1; ; n++) {
     const p = `${base} - RYACHA${n > 1 ? ` ${n}` : ''}.srt`;
-    if (!taken.has(p)) return p;
+    if (!taken.has(p) && !(await exists(p))) return p;
   }
 }
 

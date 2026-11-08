@@ -87,6 +87,8 @@ console.log(JSON.stringify(d) === JSON.stringify(['vont t', "'encourager"]) ? 'o
   const exists = async (p) => disk.has(p);
   check('next to the media', await srtTarget({ path: '/a/clip.mp4' }, exists) === '/a/clip.srt');
   check('an existing .srt is never replaced', await srtTarget({ path: '/a/turbo.mp4' }, exists) === '/a/turbo - RYACHA.srt');
+  const exists2 = async (p) => ['/a/twice.srt', '/a/twice - RYACHA.srt'].includes(p);
+  check('an earlier RYACHA export of the same media is not replaced either', await srtTarget({ path: '/a/twice.mp4' }, exists2) === '/a/twice - RYACHA 2.srt');
   check('its own earlier export is reused', await srtTarget({ path: '/a/clip.mp4', savedTo: '/x/mine.srt' }, exists) === '/x/mine.srt');
   const taken = new Set();
   const names = [];
