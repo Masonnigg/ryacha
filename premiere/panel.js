@@ -42,8 +42,10 @@
 
   // The panel loads its own host.jsx each time it opens: Premiere reads the manifest's copy only when it starts, so
   // after the app updated the panel (Premiere still open) the new panel would talk to the old host until a restart.
+  // Read as UTF-8: $.evalFile reads with the Mac's old default encoding, which turned every accented message from
+  // Premiere into "S√©quence manquante…". Evaluated at the top level, so its functions stay global.
   const hostReady = new Promise((resolve) => {
-    window.__adobe_cep__.evalScript(`$.evalFile(${JSON.stringify(path.join(HERE, 'jsx', 'host.jsx'))})`, resolve);
+    window.__adobe_cep__.evalScript(`var ryachaHost = new File(${JSON.stringify(path.join(HERE, 'jsx', 'host.jsx'))}); ryachaHost.encoding = 'UTF-8'; ryachaHost.open('r'); var ryachaCode = ryachaHost.read(); ryachaHost.close(); eval(ryachaCode);`, resolve);
   });
   function host(fn, ...args) {
     const call = `${fn}(${args.map((a) => JSON.stringify(a)).join(',')})`;
@@ -751,19 +753,28 @@
 
   // ---------- 4 · export ----------
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // the app itself, not its crash reporter: that one stays alive after Media Encoder quits
   const ameRunning = () => {
-    try { require('child_process').execFileSync('/usr/bin/pgrep', ['-f', 'Adobe Media Encoder [0-9]+\\.app/Contents/MacOS/']); return true; } catch (e) { return false; }
+    try { require('child_process').execFileSync('/usr/bin/pgrep', ['-f', 'Adobe Media Encoder [0-9]+\\.app/Contents/MacOS/Adobe Media Encoder']); return true; } catch (e) { return false; }
   };
   // Media Encoder's own log of what it rendered (one per version: the one it writes to is the newest)
   const AME_DIR = path.join(os.homedir(), 'Documents', 'Adobe', 'Adobe Media Encoder');
   const ameLogs = () => { try { return fs.readdirSync(AME_DIR).map((v) => path.join(AME_DIR, v, 'AMEEncodingLog.txt')).filter((f) => fs.existsSync(f)); } catch (e) { return []; } };
   const sizeOf = (f) => { try { return fs.statSync(f).size; } catch (e) { return -1; } };
+  // Media Encoder's session log, rewritten at each start: it says "Entering RunEventLoop" once it can take files.
+  // A cold start can take well over a minute (plugins, then its window): files sent before that sit unseen.
+  const ameSessions = () => ameLogs().map((f) => path.join(path.dirname(f), 'logs', 'Adobe Media Encoder Log.txt'));
+  const ameReady = (since) => ameSessions().some((f) => {
+    try { return fs.statSync(f).mtimeMs >= since - 5000 && fs.readFileSync(f, 'latin1').includes('Entering RunEventLoop'); } catch (e) { return false; }
+  });
+  const AME_PATIENCE = 180000; // nothing at all for 3 min (no log line, no file growing) before a file is sent again
   const samePath = (f) => { try { return path.join(fs.realpathSync(path.dirname(f)), path.basename(f)); } catch (e) { return f; } };
 
   /**
    * Follows what Media Encoder really renders, from its log and the files on disk: one bar segment per file. A file
    * it never received (it happens to the first ones sent after Premiere starts) is sent once more when nothing has
-   * moved for 40 s; after that it is reported, never silently counted as done.
+   * moved for 3 min; after that it is reported, never silently counted as done. (After 40 s it resent files Media
+   * Encoder was still preparing: each came out twice, "_1", and all were reported failed.)
    */
   async function followEncodes(sent, preset, logFrom) {
     const left = new Map(sent.map((s) => [samePath(s.p.out), s]));
@@ -784,6 +795,7 @@
         const from = buf.length >= (logFrom[f] || 0) ? (logFrom[f] || 0) : 0;
         text += lib.decodeLog(buf.subarray(from - (from % 2)));
       }
+      text += ameSessions().map(sizeOf).join(','); // its session log growing (exports starting) counts as activity
       if (text !== seen) { seen = text; idleSince = Date.now(); }
       const rec = new Map([...lib.ameRecords(text)].map(([k, v]) => [samePath(k), v]));
       for (const [out, s] of [...left]) {
@@ -795,8 +807,9 @@
       $('status').textContent = `Media Encoder : ${done}/${sent.length} rendu${done > 1 ? 's' : ''}${bad ? ` · ${bad} en erreur` : ''}…`;
       if (!left.size) break;
       if (!ameRunning()) { for (const s of [...left.values()]) finish(s, sizeOf(samePath(s.p.out)) > 0, 'Media Encoder s’est fermé avant de le rendre'); break; }
-      if (Date.now() - idleSince < 40000) continue;
-      // nothing has moved for 40 s
+      if (Date.now() - idleSince < AME_PATIENCE) continue;
+      // nothing has moved for 3 min
+      journal(`Media Encoder : rien en ${AME_PATIENCE / 60000} min, ${left.size} fichier(s) ${tried.size ? 'perdus' : 'renvoyés'}`);
       for (const s of [...left.values()]) {
         const out = samePath(s.p.out);
         if (sizeOf(out) > 0) { finish(s, true); continue; } // written, its log line not there yet
@@ -828,9 +841,15 @@
     // Media Encoder first: a file sent while it is still starting can be lost
     if (!ameRunning()) {
       progress(0, 'Ouverture de Media Encoder…');
+      const t0 = Date.now();
       await host('pubs_launchEncoder');
-      for (let i = 0; i < 120 && !ameRunning(); i++) await sleep(500);
-      await sleep(10000); // it takes files once it has finished starting
+      // it takes files once it has finished starting (its session log says so), up to 5 min for a cold start
+      while (Date.now() - t0 < 300000 && !ameReady(t0)) {
+        await sleep(1000);
+        progress(0, `Ouverture de Media Encoder… ${Math.round((Date.now() - t0) / 1000)} s`);
+      }
+      journal(`Media Encoder ${ameReady(t0) ? 'prêt' : 'pas prêt (on envoie quand même)'} après ${Math.round((Date.now() - t0) / 1000)} s`);
+      await sleep(3000);
     }
     const logFrom = Object.fromEntries(ameLogs().map((f) => [f, sizeOf(f)]));
     const sent = [];
