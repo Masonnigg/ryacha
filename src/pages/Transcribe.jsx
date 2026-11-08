@@ -4,7 +4,7 @@ import CaptionEditor from '../components/CaptionEditor.jsx';
 import { useBatchSelect, BatchButtons, Tick } from '../components/BatchSelect.jsx';
 import { PageHeader, useToast } from '../App.jsx';
 import { kit } from '../lib/kit.js';
-import { fmtTime, serializeSrt } from '../lib/srt.js';
+import { serializeSrt } from '../lib/srt.js';
 import { wordsFromWhisper, cuesFromWords, srtTarget } from '../lib/transcribe.js';
 import { unitsFromCues, groupsToCues, enforceLimits, DEFAULT_EXPRESSIONS } from '../lib/segment.js';
 import { buildRefinePrompt, parseRefine } from '../lib/refine.js';

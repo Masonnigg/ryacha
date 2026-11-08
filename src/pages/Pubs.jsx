@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Megaphone, FileText, FolderOpen, Loader2, Check, AlertTriangle, Play, Square, RotateCcw, Film, Hammer } from 'lucide-react';
 import { PageHeader, useToast } from '../App.jsx';
 import { kit } from '../lib/kit.js';
-import { pdfText, findScripts, buildBriefRequest, parseBriefReply, partText } from '../lib/ads/brief.js';
+import { pdfText, findScripts, buildBriefRequest, parseBriefReply } from '../lib/ads/brief.js';
 import { planAds, buildJob } from '../lib/ads/plan.js';
 import { recordingFrom, spokenParts, buildTakesRequest, matchParts } from '../lib/ads/takes.js';
 import { askAI, availableEngines, adsEngine, engineLabel } from '../lib/ads/ai.js';

@@ -165,7 +165,6 @@
     return list;
   }
 
-  // A command, with its output lines for progress (onLine) → stdout.
   // how many sound streams a file has, from ffmpeg's banner (asked once per file)
   const streamCount = new Map();
   const audioStreams = (ffmpegPath, file) => new Promise((resolve) => {
@@ -177,6 +176,7 @@
     p.on('close', () => { const n = (err.match(/Stream #\d+:\d+[^\n]*: Audio:/g) || []).length; streamCount.set(file, n); resolve(n); });
   });
 
+  // A command, with its output lines for progress (onLine) → stdout.
   function run(cmd, args, { env, onLine } = {}) {
     return new Promise((resolve, reject) => {
       const p = spawn(cmd, args, { env: Object.assign({}, process.env, env || {}) });
@@ -468,7 +468,6 @@
     const tools = { ffmpeg: ffmpeg(), python: python(), engine: engine(), mp3: premierePreset('3F3F3F3F_4D503320/MP3 256kbps High Quality.epr') };
     if (!tools.ffmpeg) throw new Error('ffmpeg introuvable : ouvre RYACHA une fois (l’app donne ses outils au panneau).');
     if (!tools.python || !tools.engine) throw new Error('Moteur de transcription pas installé : ouvre RYACHA › Transcrire une fois.');
-    if (!tools.mp3) throw new Error('Préréglage MP3 de Premiere introuvable.');
     const opts = transcribeOptions();
     const prompt = [PROMPTS[opts.language] || PROMPTS.fr, opts.vocab && `${String(opts.vocab).trim()}.`].filter(Boolean).join(' ');
     const dir = path.join(DATA, 'captions', String(job.script).replace(/[^\w -]/g, '_'));
@@ -503,6 +502,7 @@
           try { await run(tools.ffmpeg, args); ready = true; } catch (e) { journal(`${p.name} : son par ffmpeg impossible (${e.message}), rendu par Premiere`); }
         } else journal(`${p.name} : rendu par Premiere (${cut.error || cut.why || 'aucun clip son'})`);
         if (!ready) {
+          if (!tools.mp3) throw new Error('le son doit être rendu par Premiere, mais son préréglage MP3 est introuvable');
           at(0.05, 'rendu du son par Premiere…');
           const r = await host('pubs_renderAudio', p.index, `${base}.mp3`, tools.mp3);
           if (r.error) throw new Error(r.error);
@@ -514,7 +514,6 @@
           env: { NUMBA_CACHE_DIR: path.join(APP_DATA, 'engine', 'numba-cache'), UV_PYTHON_PREFERENCE: 'only-managed', HF_HUB_DISABLE_TELEMETRY: '1', PATH: `${path.dirname(tools.ffmpeg)}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH || ''}` }, // the ffmpeg found here (the app's own on a Mac without Homebrew) first
           onLine: (line) => { const m = line.match(/(\d+)%\|/); if (m) at(0.25 + (0.65 * +m[1]) / 100, `transcription ${m[1]} %`); },
         });
-        fs.rmSync(wav, { force: true });
         at(0.92, 'sous-titres…');
         const srt = captionsLib.srtFromEngine(JSON.parse(out.slice(out.indexOf('{'))), opts);
         if (!srt) { log(`= ${p.name} : rien n’est dit, pas de sous-titres`, 'skip'); continue; }
@@ -530,6 +529,8 @@
       } catch (e) {
         failed++;
         log(`✗ ${p.name} : ${e.message}`, 'err');
+      } finally {
+        for (const f of [`${base}.wav`, `${base}.mp3`]) fs.rmSync(f, { force: true }); // the sound was only for Whisper
       }
     }
     if (style && made) await applyStyle(style, styled);
@@ -551,10 +552,15 @@
       name = s.name;
     }
     progress(0.96, 'Style : le projet se ferme et se rouvre…');
-    const c = await host('pubs_saveAndClose');
+    // a stand-in project stays open meanwhile: with none left, Premiere would unload this panel (host.jsx)
+    const standIn = path.join(DATA, 'templates', 'ryacha-stand-in.prproj');
+    if (!fs.existsSync(standIn)) { fs.mkdirSync(path.dirname(standIn), { recursive: true }); fs.copyFileSync(path.join(HERE, 'template', 'adjustment-layer.prproj'), standIn); }
+    const c = await host('pubs_saveAndClose', standIn);
     if (c.error || !c.ok) { log(`Style : ${c.error || 'Premiere n’a pas fermé le projet'}`, 'warn'); return; }
     try {
-      fs.copyFileSync(c.path, c.path.replace(/\.prproj$/i, ' (avant style).prproj'));
+      // a dated copy each time: a second style run must not replace the copy of the project as it was before
+      const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ').replace(':', 'h');
+      fs.copyFileSync(c.path, c.path.replace(/\.prproj$/i, ` (avant style ${stamp}).prproj`));
       const xml = zlib.gunzipSync(fs.readFileSync(c.path)).toString('utf8');
       // Premiere gives an imported style a new ID: the tracks are linked to the style as it is in the project
       const styleXml = lib.styleFromProject(xml, name) || (choice.file ? fs.readFileSync(choice.file, 'utf8') : null);
@@ -681,8 +687,9 @@
     $('summary').textContent = `${plural(total, 'zoom')} dans ${plural(plan.length, 'partie')}`;
   }
 
-  async function analyse() {
-    if (!job || busy) return;
+  // force: the Zoom step itself reads the cuts again while it runs (busy), so the zooms follow the editor's last cuts
+  async function analyse(force) {
+    if (!job || (busy && !force)) return;
     try {
       $('summary').textContent = 'Lecture des parties…';
       const info = await host('pubs_zoomInfo', JOB);
@@ -716,7 +723,10 @@
   }
 
   function templateFor(width, height) {
-    const out = path.join(DATA, 'templates', `zoomi-${width}x${height}.prproj`);
+    // named after the template's own date: a panel update with a new template makes a new one
+    let stamp = 0;
+    try { stamp = Math.round(fs.statSync(path.join(HERE, 'template', 'adjustment-layer.prproj')).mtimeMs / 1000); } catch (e) {}
+    const out = path.join(DATA, 'templates', `zoomi-${width}x${height}-${stamp}.prproj`);
     if (fs.existsSync(out)) return out;
     fs.mkdirSync(path.dirname(out), { recursive: true });
     const xml = zlib.gunzipSync(fs.readFileSync(path.join(HERE, 'template', 'adjustment-layer.prproj'))).toString('utf8');
@@ -728,7 +738,7 @@
     let made = 0, layers = 0, failed = 0;
     try {
       progress(0.02, 'Lecture des coupes…');
-      await analyse(); // fresh cuts: the editor may have cut since the last preview
+      await analyse(true); // fresh cuts: the editor may have cut since the last preview
       const plan = zoomPlan();
       if (!plan.length) throw new Error($('summary').textContent || 'Aucune partie de ce job dans le projet : fais d’abord l’étape 1.');
       const anchor = { x: settings.anchor.x / 100, y: settings.anchor.y / 100 };
@@ -754,8 +764,21 @@
   // ---------- 4 · export ----------
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // the app itself, not its crash reporter: that one stays alive after Media Encoder quits
+  const AME_APP = 'Adobe Media Encoder [0-9]+\\.app/Contents/MacOS/Adobe Media Encoder';
   const ameRunning = () => {
-    try { require('child_process').execFileSync('/usr/bin/pgrep', ['-f', 'Adobe Media Encoder [0-9]+\\.app/Contents/MacOS/Adobe Media Encoder']); return true; } catch (e) { return false; }
+    try { require('child_process').execFileSync('/usr/bin/pgrep', ['-f', AME_APP]); return true; } catch (e) { return false; }
+  };
+  // when it was opened (ms), from its running time ("[[dd-]hh:]mm:ss"); 0 when it can't be read
+  const ameOpenedAt = () => {
+    try {
+      const cp = require('child_process');
+      const pid = cp.execFileSync('/usr/bin/pgrep', ['-f', AME_APP]).toString().trim().split('\n')[0];
+      const t = cp.execFileSync('/bin/ps', ['-o', 'etime=', '-p', pid]).toString().trim();
+      const [days, rest] = t.includes('-') ? t.split('-') : ['0', t];
+      const hms = rest.split(':').map(Number);
+      while (hms.length < 3) hms.unshift(0);
+      return Date.now() - (((+days * 24 + hms[0]) * 60 + hms[1]) * 60 + hms[2]) * 1000;
+    } catch (e) { return 0; }
   };
   // Media Encoder's own log of what it rendered (one per version: the one it writes to is the newest)
   const AME_DIR = path.join(os.homedir(), 'Documents', 'Adobe', 'Adobe Media Encoder');
@@ -763,10 +786,11 @@
   const sizeOf = (f) => { try { return fs.statSync(f).size; } catch (e) { return -1; } };
   // Media Encoder's session log, rewritten at each start: it says "Entering RunEventLoop" once it can take files.
   // A cold start can take well over a minute (plugins, then its window): files sent before that sit unseen.
-  const ameSessions = () => ameLogs().map((f) => path.join(path.dirname(f), 'logs', 'Adobe Media Encoder Log.txt'));
-  const ameReady = (since) => ameSessions().some((f) => {
-    try { return fs.statSync(f).mtimeMs >= since - 5000 && fs.readFileSync(f, 'latin1').includes('Entering RunEventLoop'); } catch (e) { return false; }
-  });
+  // Every version folder counts, not only those with a render log: on a Mac where Media Encoder never exported
+  // anything yet there is none, and the panel would wait for nothing.
+  const ameSessions = () => { try { return fs.readdirSync(AME_DIR).filter((v) => /^\d+(\.\d+)*$/.test(v)).map((v) => path.join(AME_DIR, v, 'logs', 'Adobe Media Encoder Log.txt')); } catch (e) { return []; } };
+  const ameSessionSince = (since) => ameSessions().filter((f) => { try { return fs.statSync(f).mtimeMs >= since - 5000; } catch (e) { return false; } });
+  const ameReady = (since) => ameSessionSince(since).some((f) => { try { return fs.readFileSync(f, 'latin1').includes('Entering RunEventLoop'); } catch (e) { return false; } });
   const AME_PATIENCE = 180000; // nothing at all for 3 min (no log line, no file growing) before a file is sent again
   const samePath = (f) => { try { return path.join(fs.realpathSync(path.dirname(f)), path.basename(f)); } catch (e) { return f; } };
 
@@ -839,17 +863,30 @@
     let queued = 0, skipped = 0, failed = 0, made4x5 = 0;
     bars(plan.length);
     // Media Encoder first: a file sent while it is still starting can be lost
+    // it takes files once it has finished starting (its session log says so), up to 5 min for a cold start; a
+    // version that writes no session log where we look: sent 150 s after it appears (the 3 min patience covers it)
+    // since = when it was opened (its session log must be at least that new); the wait itself lasts 5 min at most
+    const waitReady = async (since) => {
+      const start = Date.now();
+      let appeared = 0;
+      while (Date.now() - start < 300000 && !ameReady(since)) {
+        if (!appeared && ameRunning()) appeared = Date.now();
+        if (appeared && Date.now() - appeared > 150000 && !ameSessionSince(since).length) break;
+        await sleep(1000);
+        progress(0, `Ouverture de Media Encoder… ${Math.round((Date.now() - start) / 1000)} s`);
+      }
+      journal(`Media Encoder ${ameReady(since) ? 'prêt' : 'pas prêt (on envoie quand même)'} après ${Math.round((Date.now() - start) / 1000)} s`);
+      await sleep(3000);
+    };
     if (!ameRunning()) {
       progress(0, 'Ouverture de Media Encoder…');
       const t0 = Date.now();
       await host('pubs_launchEncoder');
-      // it takes files once it has finished starting (its session log says so), up to 5 min for a cold start
-      while (Date.now() - t0 < 300000 && !ameReady(t0)) {
-        await sleep(1000);
-        progress(0, `Ouverture de Media Encoder… ${Math.round((Date.now() - t0) / 1000)} s`);
-      }
-      journal(`Media Encoder ${ameReady(t0) ? 'prêt' : 'pas prêt (on envoie quand même)'} après ${Math.round((Date.now() - t0) / 1000)} s`);
-      await sleep(3000);
+      await waitReady(t0);
+    } else {
+      // opened by the editor a moment ago and still starting: its session log since then has no ready line yet
+      const opened = ameOpenedAt();
+      if (opened && Date.now() - opened < 300000 && !ameReady(opened)) await waitReady(opened);
     }
     const logFrom = Object.fromEntries(ameLogs().map((f) => [f, sizeOf(f)]));
     const sent = [];

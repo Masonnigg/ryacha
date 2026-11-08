@@ -266,20 +266,34 @@ function pubs_listStyles() {
 
 // The caption style can only be set in the saved project file: the panel saves and closes the project,
 // links the caption tracks to the style, then reopens it.
-function pubs_saveAndClose() {
+// Closing the last open project sends Premiere 2026 back to its Home screen, which unloads every panel: this one
+// stopped in the middle, the style never written and the project left closed. A small stand-in project (standIn)
+// stays open meanwhile, and is closed again once the project is back.
+var PUBS_STAND_IN = 'ryacha-stand-in.prproj';
+function pubsOpenProject(test) {
+  for (var i = 0; i < app.projects.numProjects; i++) if (test(app.projects[i])) return app.projects[i];
+  return null;
+}
+function pubsIsStandIn(p) { return String(p.path).indexOf(PUBS_STAND_IN) >= 0; }
+
+function pubs_saveAndClose(standIn) {
   try {
     var p = app.project;
     if (!p || !p.path) return pubsFail('Enregistre d’abord le projet.');
     var path = p.path;
     p.save();
-    var ok = p.closeDocument(true, false);
-    return pubsJson({ ok: !!ok, path: path });
+    if (standIn && !pubsOpenProject(pubsIsStandIn)) app.openDocument(new File(standIn).fsName, true, true, true, true);
+    var target = pubsOpenProject(function (x) { return x.path === path; }) || p;
+    var ok = target.closeDocument(true, false);
+    return pubsJson({ ok: !!ok, path: path, standIn: !!pubsOpenProject(pubsIsStandIn) });
   } catch (e) { return pubsFail(e); }
 }
 
 function pubs_reopen(path) {
   try {
     var ok = app.openDocument(new File(path).fsName, true, true, true, true);
+    var standIn = ok ? pubsOpenProject(pubsIsStandIn) : null;
+    if (standIn) standIn.closeDocument(false, false);
     return pubsJson({ ok: !!ok });
   } catch (e) { return pubsFail(e); }
 }
