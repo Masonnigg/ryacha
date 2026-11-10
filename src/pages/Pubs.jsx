@@ -5,7 +5,7 @@ import { kit } from '../lib/kit.js';
 import { pdfText, findScripts, buildBriefRequest, parseBriefReply } from '../lib/ads/brief.js';
 import { planAds, buildJob } from '../lib/ads/plan.js';
 import { recordingFrom, spokenParts, buildTakesRequest, matchParts, completeTakes, skippedParts } from '../lib/ads/takes.js';
-import { askAI, availableEngines, adsEngine, engineLabel } from '../lib/ads/ai.js';
+import { askAI, availableEngines, adsEngine, engineLabel, takesPlan } from '../lib/ads/ai.js';
 import { usePanelStatus, InstallButton } from '../components/PremierePanel.jsx';
 import { playAnalyseSound, SoundControl } from '../components/AnalyseSound.jsx';
 import { PartTimeline } from '../components/PartTimeline.jsx';
@@ -111,9 +111,12 @@ export default function Pubs({ active }) {
       }
       setRun({ step: 'takes', t0: Date.now(), names });
       const spoken = spokenParts(parsed);
-      const first = spoken.length ? await askAI(buildTakesRequest(spoken, recordings), { onNote }) : { parts: [] };
-      // every part checked: the ones the AI left out are asked again, a few at a time
-      const done = await completeTakes(spoken, recordings, first, (req) => askAI(req, { onNote }), { onProgress: (more) => setRun((r) => ({ ...r, more })) });
+      // Claude: the whole script at once. ChatGPT: in groups (takesPlan). Then every part checked: the ones the AI
+      // left out are asked again, a few at a time
+      const plan = takesPlan(await adsEngine());
+      const first = spoken.length && plan.whole ? await askAI(buildTakesRequest(spoken, recordings), { onNote }) : { parts: [] };
+      const done = await completeTakes(spoken, recordings, first, (req) => askAI({ ...req, effort: plan.effort, together: true }, { onNote }),
+        { ...plan, onProgress: (more) => setRun((r) => ({ ...r, more: { ...more, first: !plan.whole && more.round === 0 } })) });
       setRecs(recordings);
       setChanged([]);
       setJob((j) => ({ ...j, script: parsed, takes: done.takes, choices: {}, edits: {}, ok: [], adsOff: [], prints: recordings.map(transcriptPrint) }));
@@ -144,7 +147,9 @@ export default function Pubs({ active }) {
     setRun({ step: 'takes', alone: true, t0: Date.now(), names: job.media.filter((m) => m.on).map((m) => m.name) });
     const onNote = (note) => setRun((r) => ({ ...r, note }));
     try {
-      const done = await completeTakes(spokenParts(job.script), recs, job.takes, (req) => askAI(req, { onNote }), { onProgress: (more) => setRun((r) => ({ ...r, more })) });
+      const plan = takesPlan(await adsEngine());
+      const done = await completeTakes(spokenParts(job.script), recs, job.takes, (req) => askAI({ ...req, effort: plan.effort, together: true }, { onNote }),
+        { ...plan, onProgress: (more) => setRun((r) => ({ ...r, more })) });
       // parts that got their first take start fresh: nothing chosen, trimmed or approved on them yet
       const fresh = done.takes.parts.filter((p) => !before.has(p.id) && p.segments?.some((g) => g.phrases?.length)).map((p) => p.id);
       setJob((j) => {
@@ -343,7 +348,7 @@ function Progress({ run }) {
   const more = run?.step === 'takes' ? run.more : null; // the AI left parts out: they are asked again, a few at a time
   const inside = !run ? 0
     : run.step === 'transcribe' ? ((run.n - 1) + (run.pct || 0) / 100) / run.of
-    : more ? (run.alone ? more.found / more.total : 0.5 + 0.45 * (more.found / more.total))
+    : more ? (run.alone || more.first ? more.found / more.total : 0.5 + 0.45 * (more.found / more.total))
     : Math.min(0.95, 1 - Math.exp(-elapsed / stage.expect));
   // "Les chercher" on a reviewed job is the whole run: its % is the parts found, not the analysis' last stage
   const overall = run?.alone ? inside : stage.from + (stage.to - stage.from) * inside;
@@ -357,6 +362,7 @@ function Progress({ run }) {
   const label = !run ? 'Chargement…'
     : run.step === 'brief' ? 'L’IA lit le script'
     : run.step === 'transcribe' ? `Transcription ${run.n}/${run.of} · ${run.file}`
+    : more?.first ? `L’IA cherche chaque partie dans les rushes · ${more.found}/${more.total} trouvées`
     : more ? `L’IA cherche les parties oubliées · ${more.found}/${more.total} trouvées`
     : 'L’IA cherche chaque partie dans les rushes';
   return (
@@ -375,7 +381,8 @@ function Progress({ run }) {
         </div>
         <div className="mt-2 flex justify-between text-[12px] text-faint">
           <span>{run?.note || (run?.step === 'transcribe' ? 'Sur ton Mac, rien n’est envoyé'
-            : more ? `Elle n’a pas tout rendu : je lui redemande le reste, ${more.size} partie${more.size > 1 ? 's' : ''} à la fois`
+            : more?.first ? 'Par petits groupes de parties, plusieurs à la fois'
+            : more ? 'Elle n’a pas tout rendu : je lui redemande le reste, par petits groupes'
             : 'Estimation : l’IA ne dit pas où elle en est')}</span>
           <span className="tabular-nums">{run?.t0 ? clockOf(elapsed) : ''}</span>
         </div>

@@ -94,6 +94,7 @@ const srv = createServer(async (req, res) => {
     st.bodies.push(b);
     if (!authed) return send(401, { error: { code: 'subscription_sharing_invalid_user' } });
     if (st.mode === 'notext' && b.text) return send(400, { error: { code: 'subscription_sharing_unsupported_capability', param: 'text.format' } });
+    if (st.mode === 'noeffort' && b.reasoning) return send(400, { error: { code: 'unsupported_parameter', param: 'reasoning.effort', message: 'not supported' } });
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     const ev = (o) => res.write(`event: ${o.type}\ndata: ${JSON.stringify(o)}\n\n`);
     if (st.mode === 'limit') { ev({ type: 'response.failed', response: { error: { code: 'subscription_sharing_usage_limit_exceeded' } } }); return res.end(); }
@@ -136,6 +137,12 @@ check('expired token: refreshed once for parallel requests, new refresh token ke
 st.mode = 'notext';
 const r2 = await cg.ask(req);
 check('structured output refused → asks for JSON in the instructions instead', r2.ok && !st.bodies.at(-1).text && st.bodies.at(-1).instructions.includes('JSON valide'));
+
+const re = await cg.ask({ ...req, effort: 'high' });
+check('picking takes asks for more reasoning', re.ok && st.bodies.at(-1).reasoning?.effort === 'high' && !('reasoning' in b1), JSON.stringify(st.bodies.at(-1).reasoning));
+st.mode = 'noeffort';
+const rn = await cg.ask({ ...req, effort: 'high' });
+check('reasoning refused by this model → asked again without it', rn.ok && !('reasoning' in st.bodies.at(-1)) && st.bodies.at(-2).reasoning?.effort === 'high', JSON.stringify(rn));
 
 st.mode = 'limit';
 const r3 = await cg.ask(req);

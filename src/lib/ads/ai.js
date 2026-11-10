@@ -24,6 +24,15 @@ export async function adsEngine() {
   return hookEngineOf(s, ok.includes('claude'));
 }
 
+/**
+ * How each AI is asked to pick takes. Claude: the whole script in one request (what it does best). ChatGPT and an
+ * OpenAI key: 8 parts per request, 3 at a time, every part named in the answer, more reasoning. Measured on a
+ * 42-part job against Claude's answer: one request → 1 part answered; this → 42/42, same cuts, in under a minute.
+ */
+export const takesPlan = (engine) => (engine === 'claude'
+  ? { whole: true, sizes: [10, 4], parallel: 1, keyed: false, effort: '' }
+  : { whole: false, sizes: [8, 4], parallel: 3, keyed: true, effort: 'high' });
+
 /** One request to one engine → { ok, text } | { ok: false, code, error }. Claude runs Opus by default: picking takes needs it. */
 function ask(engine, req, s) {
   const long = { ...req, timeoutMs: 15 * 60 * 1000 }; // whole transcripts: give the AI time

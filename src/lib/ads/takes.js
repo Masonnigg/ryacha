@@ -109,23 +109,39 @@ export function spokenParts(script) {
   return out;
 }
 
-/** The Claude request for the spoken parts, over the recordings that aren't pure testimonials. */
-export function buildTakesRequest(parts, recordings) {
+/**
+ * The AI request for the spoken parts, over the recordings that aren't pure testimonials. keyed: the answer is one
+ * object per part id, every id required, so a strict structured answer (ChatGPT) cannot leave a part out.
+ */
+export function buildTakesRequest(parts, recordings, { keyed = false } = {}) {
   const lines = [];
   for (const r of recordings) {
     lines.push(`=== ${r.id}: ${r.name}`);
     r.phrases.forEach((p, k) => lines.push(`${r.id}#${k} [${clock(r.words[p[0]].s)}] ${sayWords(p.map((i) => r.words[i].text))}`));
   }
   const user = 'SCRIPT PARTS:\n' + parts.map((p) => `- id: ${p.key}\n  text: ${p.text}`).join('\n') + '\n\nTRANSCRIPTS:\n' + lines.join('\n');
-  return { system: SYSTEM, user, schema: SCHEMA, name: 'ad_takes' };
+  if (!keyed) return { system: SYSTEM, user, schema: SCHEMA, name: 'ad_takes' };
+  const { id, ...one } = SCHEMA.properties.parts.items.properties; // eslint-disable-line no-unused-vars
+  const part = { type: 'object', properties: one, required: Object.keys(one), additionalProperties: false };
+  const keys = parts.map((p) => p.key);
+  return {
+    system: `${SYSTEM}\n- Answer under each part id listed (${keys.length} ids), one object per id.`,
+    user,
+    schema: { type: 'object', properties: Object.fromEntries(keys.map((k) => [k, part])), required: keys, additionalProperties: false },
+    name: 'ad_takes',
+  };
 }
+
+/** A reply in either shape ({ parts: [...] }, or one object per part id) → [{ id, segments, confidence, note }] */
+export const replyParts = (reply) => (Array.isArray(reply?.parts) ? reply.parts
+  : Object.entries(reply || {}).filter(([, p]) => p && typeof p === 'object' && !Array.isArray(p)).map(([id, p]) => ({ ...p, id })));
 
 const hasTake = (p) => (p?.segments || []).some((g) => g?.phrases?.length);
 
 /** The AI's reply → its parts under the keys asked for: "H2" for "V1|H2" goes back under the one key it can mean. */
 function underKeys(reply, keys) {
   const out = [];
-  for (const p of reply?.parts || []) {
+  for (const p of replyParts(reply)) {
     let id = String(p?.id || '').trim();
     if (!keys.includes(id)) {
       const hits = keys.filter((k) => k.split('|')[1] === id.split('|').pop());
@@ -145,11 +161,13 @@ export const skippedParts = (script, takes) => {
 /**
  * The AI can answer for a few parts only and still end normally (seen: ChatGPT gave 1 hook out of 42), which showed
  * the 41 others as not in the rushes. Every part asked is checked: those with no take are asked again, a few at a
- * time over the same transcripts, then those the AI still never answered, fewer at a time.
- * ask(request) → parsed reply. onProgress({ found, total, size }) before each request.
+ * time over the same transcripts, then those the AI still never answered, fewer at a time. With an empty reply
+ * this is the whole search, in groups (how ChatGPT matches Claude: 8 parts per request, not 42 at once).
+ * ask(request) → parsed reply. parallel = groups asked side by side; keyed = one answer object per part id.
+ * onProgress({ found, total, size, round }) as groups go out.
  * → { takes, skipped: keys the AI never answered, error: why it stopped early (what was found is kept) }
  */
-export async function completeTakes(parts, recordings, reply, ask, { onProgress, sizes = [10, 4] } = {}) {
+export async function completeTakes(parts, recordings, reply, ask, { onProgress, sizes = [10, 4], parallel = 1, keyed = false } = {}) {
   const keys = parts.map((p) => p.key);
   const byKey = new Map();
   const seen = new Set(); // answered at least once, even with "nothing found"
@@ -161,14 +179,22 @@ export async function completeTakes(parts, recordings, reply, ask, { onProgress,
   };
   merge(reply);
   let error = null;
+  const found = () => keys.filter((k) => hasTake(byKey.get(k))).length;
   for (let round = 0; round < sizes.length && !error; round++) {
     // first everything without a take (a lazy "nothing found" too), then only what was never answered at all
     const todo = keys.filter((k) => !hasTake(byKey.get(k)) && (round === 0 || !seen.has(k)));
-    for (let i = 0; i < todo.length; i += sizes[round]) {
-      const group = new Set(todo.slice(i, i + sizes[round]));
-      onProgress?.({ found: keys.filter((k) => hasTake(byKey.get(k))).length, total: keys.length, size: group.size });
-      try { merge(await ask(buildTakesRequest(parts.filter((p) => group.has(p.key)), recordings))); } catch (e) { error = e; break; }
-    }
+    const groups = [];
+    for (let i = 0; i < todo.length; i += sizes[round]) groups.push(new Set(todo.slice(i, i + sizes[round])));
+    let next = 0;
+    const worker = async () => {
+      while (next < groups.length && !error) {
+        const group = groups[next++];
+        onProgress?.({ found: found(), total: keys.length, size: group.size, round });
+        try { merge(await ask(buildTakesRequest(parts.filter((p) => group.has(p.key)), recordings, { keyed }))); } catch (e) { error ||= e; }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(parallel, groups.length) }, worker));
+    if (groups.length) onProgress?.({ found: found(), total: keys.length, size: 0, round });
   }
   return { takes: { ...reply, parts: keys.filter((k) => byKey.has(k)).map((k) => byKey.get(k)) }, skipped: keys.filter((k) => !seen.has(k)), error };
 }

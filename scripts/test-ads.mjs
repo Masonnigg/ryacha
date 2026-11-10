@@ -655,6 +655,32 @@ await atest('takes: an AI error halfway keeps what was found and says why it sto
   assert.equal(done.skipped.length, 6);
 });
 
+await atest('takes, ChatGPT way: the whole search in groups of 8, 3 side by side, one answer object per part', async () => {
+  const { buildTakesRequest } = await import('../src/lib/ads/takes.js');
+  const sc = hooksScript(20);
+  const spoken = spokenParts(sc);
+  const recs = [rush('R1', 'bonjour. on commence.')];
+  const req = buildTakesRequest(spoken.slice(0, 3), recs, { keyed: true });
+  assert.deepEqual(req.schema.required, ['V1|H1', 'V1|H2', 'V1|H3']); // strict output: none can be left out
+  assert.deepEqual(Object.keys(req.schema.properties['V1|H1'].properties), ['segments', 'confidence', 'note']);
+  assert.match(req.system, /each part id listed \(3 ids\)/);
+  let live = 0, most = 0;
+  const sizes = [];
+  const done = await completeTakes(spoken, recs, { parts: [] }, async (r) => {
+    const keys = r.schema.required;
+    sizes.push(keys.length);
+    live++; most = Math.max(most, live);
+    await new Promise((ok) => setTimeout(ok, 20));
+    live--;
+    return Object.fromEntries(keys.map((k) => [k, { segments: [{ phrases: ['R1#0'], alternatives: [], trims: [] }], confidence: 'sure', note: '' }]));
+  }, { sizes: [8, 4], parallel: 3, keyed: true });
+  assert.deepEqual(sizes, [8, 8, 5]); // 21 parts
+  assert.equal(most, 3);
+  assert.equal(done.takes.parts.length, 21);
+  assert.deepEqual(done.takes.parts.map((p) => p.id), spoken.map((p) => p.key)); // script order, whatever answered first
+  assert.deepEqual(done.skipped, []);
+});
+
 await atest('takes: a job saved with skipped parts shows them as skipped, not as missing from the rushes', async () => {
   const sc = hooksScript(3);
   const parts = matchParts(sc, [rush('R1', 'bonjour.')], { parts: [takeFor('V1|H1')] }, {});

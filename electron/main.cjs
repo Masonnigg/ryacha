@@ -353,12 +353,15 @@ function openaiError(status, err, model) {
   return `OpenAI : ${err?.message || `erreur ${status}`}`;
 }
 
-let openaiAbort = null;
-ipcMain.handle('openai:ask', async (_e, { system, user, schema, name, timeoutMs }) => {
+// requests in flight: a new one cancels the others (a Hook asked again), except the parts of one Pubs search
+// (together: true), which run side by side; Annuler stops them all
+const openaiAborts = new Set();
+ipcMain.handle('openai:ask', async (_e, { system, user, schema, name, timeoutMs, together }) => {
   const { key, model } = openaiConf();
   if (!key) return { ok: false, code: 'nokey', error: 'Ajoute ta clé OpenAI dans Réglages.' };
-  openaiAbort?.abort();
-  const ctrl = (openaiAbort = new AbortController());
+  if (!together) for (const c of openaiAborts) c.abort();
+  const ctrl = new AbortController();
+  openaiAborts.add(ctrl);
   const timer = setTimeout(() => ctrl.abort('timeout'), Math.min(timeoutMs || 4 * 60_000, 20 * 60_000));
   try {
     const r = await fetch(`${OPENAI_URL}/responses`, {
@@ -385,10 +388,10 @@ ipcMain.handle('openai:ask', async (_e, { system, user, schema, name, timeoutMs 
     return { ok: false, error: 'Pas de connexion à OpenAI. Vérifie ta connexion internet.' };
   } finally {
     clearTimeout(timer);
-    if (openaiAbort === ctrl) openaiAbort = null;
+    openaiAborts.delete(ctrl);
   }
 });
-ipcMain.handle('openai:cancel', () => openaiAbort?.abort());
+ipcMain.handle('openai:cancel', () => { for (const c of openaiAborts) c.abort(); });
 // "Tester" in Réglages: is the key valid and the model available? (free call)
 ipcMain.handle('openai:status', async () => {
   const { key, model } = openaiConf();
@@ -427,18 +430,19 @@ ipcMain.handle('chatgpt:cancelSignIn', () => chatgpt.cancelSignIn());
 ipcMain.handle('chatgpt:signOut', chatgptCall(() => chatgpt.signOut()));
 ipcMain.handle('chatgpt:status', () => chatgpt.status());
 ipcMain.handle('chatgpt:models', chatgptCall(async () => ({ models: await chatgpt.models() })));
-let chatgptAbort = null;
+const chatgptAborts = new Set(); // as openaiAborts
 ipcMain.handle('chatgpt:ask', async (_e, req) => {
-  chatgptAbort?.abort();
-  const ctrl = (chatgptAbort = new AbortController());
+  if (!req?.together) for (const c of chatgptAborts) c.abort();
+  const ctrl = new AbortController();
+  chatgptAborts.add(ctrl);
   // 4 min by default; Pubs reads whole transcripts and asks for more (capped at 20 min)
   const timer = setTimeout(() => ctrl.abort('timeout'), Math.min(req?.timeoutMs || 4 * 60_000, 20 * 60_000));
   try { return await chatgpt.ask(req, ctrl.signal); } finally {
     clearTimeout(timer);
-    if (chatgptAbort === ctrl) chatgptAbort = null;
+    chatgptAborts.delete(ctrl);
   }
 });
-ipcMain.handle('chatgpt:cancel', () => chatgptAbort?.abort());
+ipcMain.handle('chatgpt:cancel', () => { for (const c of chatgptAborts) c.abort(); });
 
 // ---- local transcription (Whisper turbo on Apple MLX) --------------------
 // Engine = a private Python venv (uv) with mlx-whisper; model = mlx-community/whisper-large-v3-turbo.

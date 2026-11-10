@@ -104,7 +104,7 @@ function planError(status, err) {
   }
   if (code === 'subscription_sharing_invalid_user' || status === 401) return { code: 'signin', error: 'Reconnecte ton compte ChatGPT dans Réglages.' };
   if (code === 'subscription_sharing_unsupported_capability') return { code: 'unsupported', param: err?.param, error: `ChatGPT : option non prise en charge (${err?.param || '?'}).` };
-  return { code: code || `http_${status}`, error: `ChatGPT : ${err?.message || code || `erreur ${status}`}` };
+  return { code: code || `http_${status}`, param: err?.param, error: `ChatGPT : ${err?.message || code || `erreur ${status}`}` };
 }
 
 function createChatGPT({ dataDir, openExternal, settings, authBase = 'https://auth.openai.com', apiBase = RESOURCE, log = () => {} }) {
@@ -219,10 +219,14 @@ function createChatGPT({ dataDir, openExternal, settings, authBase = 'https://au
     return (j.models || []).filter((m) => m.visibility === 'list').map((m) => ({ id: m.slug, name: m.display_name || m.slug }));
   }
 
-  /** { system, user, schema, name } → { ok, text, model } | { ok: false, code, error }. Streams, as the plan route requires. */
-  async function ask({ system, user, schema, name }, signal) {
+  /**
+   * { system, user, schema, name, effort } → { ok, text, model } | { ok: false, code, error }. Streams, as the plan
+   * route requires. effort = reasoning effort ('high' for picking takes), left out when the route refuses it.
+   */
+  async function ask({ system, user, schema, name, effort }, signal) {
     const model = settings().chatgptModel || DEFAULT_MODEL;
     let structured = true;
+    let reasoning = !!effort;
     let retried401 = false;
     for (let attempt = 0; attempt < 4; attempt++) {
       let a;
@@ -235,6 +239,7 @@ function createChatGPT({ dataDir, openExternal, settings, authBase = 'https://au
         store: false,
         stream: true,
         ...(structured ? { text: { format: { type: 'json_schema', name, schema, strict: true } } } : {}),
+        ...(reasoning ? { reasoning: { effort } } : {}),
       };
       let r;
       try {
@@ -272,6 +277,7 @@ function createChatGPT({ dataDir, openExternal, settings, authBase = 'https://au
         failure = end ? planError(0, end.response?.error) : { code: 'cut', error: 'La réponse de ChatGPT s’est arrêtée avant la fin. Réessaie.' };
       }
       if (failure.code === 'unsupported' && String(failure.param || '').startsWith('text') && structured) { structured = false; continue; }
+      if (reasoning && String(failure.param || '').startsWith('reasoning')) { reasoning = false; continue; } // this model/route: no effort setting
       if (failure.code === 'signin' && !retried401) {
         retried401 = true;
         try { await session({ force: true }); continue; } catch (e) { return { ok: false, code: e.code || 'signin', error: e.message }; }
