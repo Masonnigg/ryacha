@@ -586,4 +586,82 @@ test('panel export: 9x16 and 4x5 trees side by side, reviews in 9x16 only', () =
   assert.deepEqual(pubsLib.exportPlan(job, '/L', ['4x5']).map((p) => p.format), ['4x5']);
 });
 
+// ---- an AI that answers for some parts only (seen: 1 hook out of 42, ended normally)
+const { completeTakes, skippedParts, spokenParts } = await import('../src/lib/ads/takes.js');
+const atest = async (name, fn) => { await fn(); n++; console.log('✓', name); };
+const hooksScript = (count) => parseBriefReply({ script: 'S9', title: 't', notes: [], variants: [
+  { id: 'V1', name: '', hooks: Array.from({ length: count }, (_, i) => part(`accroche numéro ${i + 1}`)), transis: [], corps: [part('le corps')], corps_from: '' },
+] }, 'S9');
+const takeFor = (id, phrase = 'R1#0') => ({ id, segments: [{ phrases: [phrase], alternatives: [], trims: [] }], confidence: 'sure', note: '' });
+const askedIds = (req) => [...req.user.matchAll(/- id: (\S+)/g)].map((m) => m[1]);
+
+await atest('takes: parts the AI left out are asked again in small groups, then the rest fewer at a time', async () => {
+  const sc = hooksScript(12);
+  const spoken = spokenParts(sc);
+  const recs = [rush('R1', 'bonjour. on commence.')];
+  const asked = [];
+  // 1st reply: H1 only. Re-asks: answers every part asked except H7, written without its variant once ("H3")
+  const ask = async (req) => {
+    const ids = askedIds(req);
+    asked.push(ids);
+    return { parts: ids.filter((k) => k !== 'V1|H7').map((k) => takeFor(k === 'V1|H3' ? 'H3' : k)) };
+  };
+  const done = await completeTakes(spoken, recs, { parts: [takeFor('V1|H1')] }, ask, { sizes: [5, 2] });
+  assert.deepEqual(asked.map((g) => g.length), [5, 5, 2, 1]); // 12 missing in groups of 5, then H7 alone
+  assert.deepEqual(asked.at(-1), ['V1|H7']);
+  assert.deepEqual(done.skipped, ['V1|H7']);
+  assert.equal(done.error, null);
+  assert.deepEqual(done.takes.parts.map((p) => p.id), spoken.map((p) => p.key).filter((k) => k !== 'V1|H7'));
+  assert.deepEqual(skippedParts(sc, done.takes), ['V1|H7']);
+  const parts = matchParts(sc, recs, done.takes, {});
+  assert.deepEqual(parts['V1|H7'].flags, ['L’IA a sauté cette partie : « Les chercher » en haut de l’onglet']);
+  assert.equal(parts['V1|H3'].pieces.length, 1); // "H3" landed under V1|H3
+});
+
+await atest('takes: "nothing found" is asked once more, then stays "introuvable" (not skipped)', async () => {
+  const sc = hooksScript(2);
+  const spoken = spokenParts(sc);
+  const recs = [rush('R1', 'bonjour. on commence.')];
+  let calls = 0;
+  const empty = (id) => ({ id, segments: [], confidence: 'check', note: 'pas trouvée' });
+  const done = await completeTakes(spoken, recs, { parts: [takeFor('V1|H1'), empty('V1|H2'), takeFor('V1|C1')] }, async (req) => {
+    calls++;
+    return { parts: askedIds(req).map(empty) };
+  });
+  assert.equal(calls, 1);
+  assert.deepEqual(done.skipped, []);
+  assert.deepEqual(matchParts(sc, recs, done.takes, {})['V1|H2'].flags, ['Prise introuvable dans les rushes']);
+});
+
+await atest('takes: nothing to ask when every part has its take', async () => {
+  const sc = hooksScript(3);
+  const spoken = spokenParts(sc);
+  const done = await completeTakes(spoken, [rush('R1', 'bonjour.')], { parts: spoken.map((p) => takeFor(p.key)) }, async () => { throw new Error('never asked'); });
+  assert.equal(done.error, null);
+  assert.equal(done.takes.parts.length, 4);
+});
+
+await atest('takes: an AI error halfway keeps what was found and says why it stopped', async () => {
+  const sc = hooksScript(9);
+  const spoken = spokenParts(sc);
+  let calls = 0;
+  const done = await completeTakes(spoken, [rush('R1', 'bonjour.')], { parts: [] }, async (req) => {
+    if (++calls === 2) throw new Error('limite atteinte');
+    return { parts: askedIds(req).map((k) => takeFor(k)) };
+  }, { sizes: [4, 2] });
+  assert.equal(calls, 2);
+  assert.equal(done.error.message, 'limite atteinte');
+  assert.equal(done.takes.parts.length, 4);
+  assert.equal(done.skipped.length, 6);
+});
+
+await atest('takes: a job saved with skipped parts shows them as skipped, not as missing from the rushes', async () => {
+  const sc = hooksScript(3);
+  const parts = matchParts(sc, [rush('R1', 'bonjour.')], { parts: [takeFor('V1|H1')] }, {});
+  assert.deepEqual(skippedParts(sc, { parts: [takeFor('V1|H1')] }), ['V1|H2', 'V1|H3', 'V1|C1']);
+  assert.equal(parts['V1|H2'].confidence, 'check');
+  assert.equal(parts['V1|H2'].skipped, true);
+  assert.match(parts['V1|C1'].flags[0], /sauté/);
+});
+
 console.log(`ads: ${n} tests OK`);

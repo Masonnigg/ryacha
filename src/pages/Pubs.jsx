@@ -4,7 +4,7 @@ import { PageHeader, useToast } from '../App.jsx';
 import { kit } from '../lib/kit.js';
 import { pdfText, findScripts, buildBriefRequest, parseBriefReply } from '../lib/ads/brief.js';
 import { planAds, buildJob } from '../lib/ads/plan.js';
-import { recordingFrom, spokenParts, buildTakesRequest, matchParts } from '../lib/ads/takes.js';
+import { recordingFrom, spokenParts, buildTakesRequest, matchParts, completeTakes, skippedParts } from '../lib/ads/takes.js';
 import { askAI, availableEngines, adsEngine, engineLabel } from '../lib/ads/ai.js';
 import { usePanelStatus, InstallButton } from '../components/PremierePanel.jsx';
 import { playAnalyseSound, SoundControl } from '../components/AnalyseSound.jsx';
@@ -70,6 +70,7 @@ export default function Pubs({ active }) {
     return out;
   }, [job?.script, job?.takes, job?.loose, job?.choices, job?.edits, recs]);
   const ads = useMemo(() => (job?.script ? planAds(job.script) : []), [job?.script]);
+  const skipped = useMemo(() => (job?.script && job.takes ? skippedParts(job.script, job.takes) : []), [job?.script, job?.takes]);
   // the rushes usually say which script they are ("Test S11", "S11 - Acc 1.mp4"): pick it when only one script fits
   useEffect(() => {
     if (!job || job.scriptId || !scripts.length || !job.media?.length) return;
@@ -110,15 +111,52 @@ export default function Pubs({ active }) {
       }
       setRun({ step: 'takes', t0: Date.now(), names });
       const spoken = spokenParts(parsed);
-      const takes = spoken.length ? await askAI(buildTakesRequest(spoken, recordings), { onNote }) : { parts: [] };
+      const first = spoken.length ? await askAI(buildTakesRequest(spoken, recordings), { onNote }) : { parts: [] };
+      // every part checked: the ones the AI left out are asked again, a few at a time
+      const done = await completeTakes(spoken, recordings, first, (req) => askAI(req, { onNote }), { onProgress: (more) => setRun((r) => ({ ...r, more })) });
       setRecs(recordings);
       setChanged([]);
-      setJob((j) => ({ ...j, script: parsed, takes, choices: {}, edits: {}, adsOff: [], prints: recordings.map(transcriptPrint) }));
+      setJob((j) => ({ ...j, script: parsed, takes: done.takes, choices: {}, edits: {}, ok: [], adsOff: [], prints: recordings.map(transcriptPrint) }));
       setPhase('review'); setRun(null); setSel(null);
+      sayMissing(done);
     } catch (e) {
       setPhase('setup'); setRun({ error: cleanErr(e) });
       kit.report({ where: 'pubs:analyse', message: cleanErr(e), stack: e?.stack, name: e?.name }).catch(() => {});
     }
+  }
+
+  // what the second search found and left, in one message (a second toast would replace the first), so nobody
+  // builds a part the AI never looked for
+  function sayMissing({ skipped, error }, found = 0) {
+    const s = (n) => (n > 1 ? 's' : '');
+    const n = skipped.length;
+    const got = found ? `${found} partie${s(found)} retrouvée${s(found)}. ` : '';
+    if (error) kit.report({ where: 'pubs:parties-oubliees', message: cleanErr(error), stack: error?.stack, name: error?.name }).catch(() => {});
+    if (error) notify(`${got}Recherche interrompue (${cleanErr(error)})${n ? ` : ${n} partie${s(n)} encore vide${s(n)}, « Les chercher » pour réessayer` : ''}.`, { tone: 'bad', ms: 10000 });
+    else if (n) notify(`${got}L’IA n’a toujours pas cherché ${n} partie${s(n)} : « Les chercher » pour réessayer.`, { tone: 'bad', ms: 10000 });
+    else if (found) notify(`${got}Vérifie-les avant de construire.`, { ms: 6000 });
+  }
+
+  // a job where the AI skipped parts (before this check existed, or it stopped early): ask for those only
+  async function findMissing() {
+    const before = new Set((job.takes.parts || []).filter((p) => p.segments?.some((g) => g.phrases?.length)).map((p) => p.id));
+    setPhase('running');
+    setRun({ step: 'takes', alone: true, t0: Date.now(), names: job.media.filter((m) => m.on).map((m) => m.name) });
+    const onNote = (note) => setRun((r) => ({ ...r, note }));
+    try {
+      const done = await completeTakes(spokenParts(job.script), recs, job.takes, (req) => askAI(req, { onNote }), { onProgress: (more) => setRun((r) => ({ ...r, more })) });
+      // parts that got their first take start fresh: nothing chosen, trimmed or approved on them yet
+      const fresh = done.takes.parts.filter((p) => !before.has(p.id) && p.segments?.some((g) => g.phrases?.length)).map((p) => p.id);
+      setJob((j) => {
+        const choices = { ...(j.choices || {}) }, edits = { ...(j.edits || {}) };
+        for (const k of fresh) { delete choices[k]; delete edits[k]; }
+        return { ...j, takes: done.takes, choices, edits, ok: (j.ok || []).filter((k) => !fresh.includes(k)) };
+      });
+      sayMissing(done, fresh.length);
+    } catch (e) {
+      notify(`Recherche impossible : ${cleanErr(e)}`, { tone: 'bad', ms: 8000 });
+      kit.report({ where: 'pubs:parties-oubliees', message: cleanErr(e), stack: e?.stack, name: e?.name }).catch(() => {});
+    } finally { setPhase('review'); setRun(null); }
   }
 
   async function sendToPremiere() {
@@ -151,6 +189,13 @@ export default function Pubs({ active }) {
                   <AlertTriangle size={14} className="shrink-0" />
                   <span className="flex-1">{changed.join(', ')} {changed.length > 1 ? 'ont changé' : 'a changé'} depuis l’analyse (déplacé, réenregistré ou retranscrit) : les prises choisies ne tombent plus sur les bons mots. Relance l’analyse avant de construire.</span>
                   <button className="btn h-7" onClick={analyse}>Relancer l’analyse</button>
+                </div>
+              )}
+              {!changed.length && skipped.length > 0 && (
+                <div className="mb-3 flex items-center gap-3 rounded-lg bg-warn/10 px-3 py-2 text-[12.5px] text-warn" role="alert">
+                  <AlertTriangle size={14} className="shrink-0" />
+                  <span className="flex-1">L’IA n’a pas cherché {skipped.length > 1 ? `${skipped.length} parties` : 'une partie'} ({skipped.slice(0, 8).map((k) => k.split('|')[1]).join(', ')}{skipped.length > 8 ? '…' : ''}) : {skipped.length > 1 ? 'elles sont vides' : 'elle est vide'}, mais les prises peuvent être dans les rushes.</span>
+                  <button className="btn h-7" onClick={findMissing}>Les chercher</button>
                 </div>
               )}
               <Review job={job} setJob={setJob} parts={parts} recs={recs} ads={ads} sel={sel} setSel={setSel} />
@@ -295,10 +340,13 @@ function Progress({ run }) {
   const at = STAGES.findIndex((x) => x.step === run?.step);
   const stage = STAGES[Math.max(0, at)];
   const elapsed = run?.t0 ? (Date.now() - run.t0) / 1000 : 0;
+  const more = run?.step === 'takes' ? run.more : null; // the AI left parts out: they are asked again, a few at a time
   const inside = !run ? 0
     : run.step === 'transcribe' ? ((run.n - 1) + (run.pct || 0) / 100) / run.of
+    : more ? (run.alone ? more.found / more.total : 0.5 + 0.45 * (more.found / more.total))
     : Math.min(0.95, 1 - Math.exp(-elapsed / stage.expect));
-  const overall = stage.from + (stage.to - stage.from) * inside;
+  // "Les chercher" on a reviewed job is the whole run: its % is the parts found, not the analysis' last stage
+  const overall = run?.alone ? inside : stage.from + (stage.to - stage.from) * inside;
   // the render bar, like Premiere's: one segment per stage, each rush file its own
   const names = run?.names || [];
   const segments = [
@@ -309,6 +357,7 @@ function Progress({ run }) {
   const label = !run ? 'Chargement…'
     : run.step === 'brief' ? 'L’IA lit le script'
     : run.step === 'transcribe' ? `Transcription ${run.n}/${run.of} · ${run.file}`
+    : more ? `L’IA cherche les parties oubliées · ${more.found}/${more.total} trouvées`
     : 'L’IA cherche chaque partie dans les rushes';
   return (
     <div className="grid flex-1 place-items-center">
@@ -325,7 +374,9 @@ function Progress({ run }) {
           ))}
         </div>
         <div className="mt-2 flex justify-between text-[12px] text-faint">
-          <span>{run?.note || (run?.step === 'transcribe' ? 'Sur ton Mac, rien n’est envoyé' : 'Estimation : l’IA ne dit pas où elle en est')}</span>
+          <span>{run?.note || (run?.step === 'transcribe' ? 'Sur ton Mac, rien n’est envoyé'
+            : more ? `Elle n’a pas tout rendu : je lui redemande le reste, ${more.size} partie${more.size > 1 ? 's' : ''} à la fois`
+            : 'Estimation : l’IA ne dit pas où elle en est')}</span>
           <span className="tabular-nums">{run?.t0 ? clockOf(elapsed) : ''}</span>
         </div>
         <ol className="mt-6 grid gap-2 text-[12.5px]">
@@ -486,7 +537,7 @@ function PartDetail({ k, title, part, choice, ok, onChoose, onOk, recs, edits, o
               })}
             </ol>
           ) : (
-            <p className="text-[13.5px] leading-relaxed" data-selectable>{part.text || <span className="text-faint">Rien trouvé dans les rushes.</span>}</p>
+            <p className="text-[13.5px] leading-relaxed" data-selectable>{part.text || <span className="text-faint">{part.skipped ? 'L’IA n’a pas encore cherché cette partie.' : 'Rien trouvé dans les rushes.'}</span>}</p>
           )}
           {part.removed?.length > 0 && <p className="mt-3 text-[12px] text-faint">Retiré (bégaiements, faux départs) : {part.removed.join(' · ')}</p>}
         </div>

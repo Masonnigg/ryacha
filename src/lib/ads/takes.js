@@ -120,6 +120,59 @@ export function buildTakesRequest(parts, recordings) {
   return { system: SYSTEM, user, schema: SCHEMA, name: 'ad_takes' };
 }
 
+const hasTake = (p) => (p?.segments || []).some((g) => g?.phrases?.length);
+
+/** The AI's reply → its parts under the keys asked for: "H2" for "V1|H2" goes back under the one key it can mean. */
+function underKeys(reply, keys) {
+  const out = [];
+  for (const p of reply?.parts || []) {
+    let id = String(p?.id || '').trim();
+    if (!keys.includes(id)) {
+      const hits = keys.filter((k) => k.split('|')[1] === id.split('|').pop());
+      id = hits.length === 1 ? hits[0] : null;
+    }
+    if (id) out.push({ ...p, id });
+  }
+  return out;
+}
+
+/** Spoken parts the AI's reply says nothing about (not "nothing found": no answer at all) → their keys. */
+export const skippedParts = (script, takes) => {
+  const seen = new Set((takes?.parts || []).map((p) => p.id));
+  return spokenParts(script).map((p) => p.key).filter((k) => !seen.has(k));
+};
+
+/**
+ * The AI can answer for a few parts only and still end normally (seen: ChatGPT gave 1 hook out of 42), which showed
+ * the 41 others as not in the rushes. Every part asked is checked: those with no take are asked again, a few at a
+ * time over the same transcripts, then those the AI still never answered, fewer at a time.
+ * ask(request) → parsed reply. onProgress({ found, total, size }) before each request.
+ * → { takes, skipped: keys the AI never answered, error: why it stopped early (what was found is kept) }
+ */
+export async function completeTakes(parts, recordings, reply, ask, { onProgress, sizes = [10, 4] } = {}) {
+  const keys = parts.map((p) => p.key);
+  const byKey = new Map();
+  const seen = new Set(); // answered at least once, even with "nothing found"
+  const merge = (r) => {
+    for (const p of underKeys(r, keys)) {
+      seen.add(p.id);
+      if (!hasTake(byKey.get(p.id)) && (hasTake(p) || !byKey.has(p.id))) byKey.set(p.id, p);
+    }
+  };
+  merge(reply);
+  let error = null;
+  for (let round = 0; round < sizes.length && !error; round++) {
+    // first everything without a take (a lazy "nothing found" too), then only what was never answered at all
+    const todo = keys.filter((k) => !hasTake(byKey.get(k)) && (round === 0 || !seen.has(k)));
+    for (let i = 0; i < todo.length; i += sizes[round]) {
+      const group = new Set(todo.slice(i, i + sizes[round]));
+      onProgress?.({ found: keys.filter((k) => hasTake(byKey.get(k))).length, total: keys.length, size: group.size });
+      try { merge(await ask(buildTakesRequest(parts.filter((p) => group.has(p.key)), recordings))); } catch (e) { error = e; break; }
+    }
+  }
+  return { takes: { ...reply, parts: keys.filter((k) => byKey.has(k)).map((k) => byKey.get(k)) }, skipped: keys.filter((k) => !seen.has(k)), error };
+}
+
 /** Phrase ids (+ their trims) → each phrase's words as used: [{ id: 'R1#4', rec, idx: [wordIndex…] }]. */
 export function phraseWords(ids, recordings, trims = []) {
   const byId = new Map((trims || []).map((t) => [t.phrase, t]));
@@ -287,7 +340,8 @@ export function matchParts(script, recordings, takes, opts = {}) {
           spokenDone = true; // all spoken lines of a part come from one Claude pick
           const t = byId.get(key);
           const segs = (t?.segments || []).filter((g) => g.phrases?.length);
-          if (!segs.length) { res.flags.push('Prise introuvable dans les rushes'); res.confidence = 'check'; continue; }
+          // no answer at all is the AI skipping the part, not the part missing from the rushes: say which
+          if (!segs.length) { res.skipped = !t; res.flags.push(t ? 'Prise introuvable dans les rushes' : 'L’IA a sauté cette partie : « Les chercher » en haut de l’onglet'); res.confidence = 'check'; continue; }
           // each sentence of the take, with the other attempts of it the editor can switch to
           res.segments = segs.map((g) => ({
             phrases: g.phrases,
