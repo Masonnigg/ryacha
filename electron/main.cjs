@@ -921,6 +921,7 @@ async function checkForUpdate() {
 }
 
 ipcMain.handle('app:version', () => app.getVersion());
+ipcMain.handle('app:trial', () => !!process.env.RYACHA_TRIAL); // the trial launcher: say it on screen
 ipcMain.handle('update:check', async () => { const u = await checkForUpdate(); return u ? publicUpdate(u) : null; });
 ipcMain.handle('update:openPage', () => shell.openExternal(RELEASES_PAGE));
 

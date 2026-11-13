@@ -14,6 +14,7 @@
   // a trial copy of the panel (trial.json next to it) works on the trial app's data, never on RYACHA's own
   const TRIAL = (() => { try { return JSON.parse(fs.readFileSync(path.join(HERE, 'trial.json'), 'utf8')); } catch (e) { return null; } })();
   const MAIN_DATA = path.join(os.homedir(), 'Library', 'Application Support', 'Edit Kit');
+  if (TRIAL) { document.title = 'RYACHA essai'; const b = document.querySelector('.brand'); if (b) b.textContent = 'RYACHA · ESSAI'; }
   const APP_DATA = (TRIAL && TRIAL.data) || MAIN_DATA;
   const DATA = path.join(APP_DATA, 'pubs');
   // every build RYACHA made, one per script (one project can hold several); job.json = the latest, as older apps wrote

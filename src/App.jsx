@@ -37,6 +37,8 @@ export default function App() {
 
 function Main() {
   const [page, setPage] = useState('palettes');
+  const [trial, setTrial] = useState(false); // started by the trial launcher
+  useEffect(() => { kit.trial?.().then((t) => setTrial(!!t)).catch(() => {}); }, []);
   const pageRef = useRef(page);
   pageRef.current = page;
   const [toast, setToast] = useState(null);
@@ -82,7 +84,7 @@ function Main() {
             <img src={avatar} alt="" className="size-8 rounded-lg object-cover ring-1 ring-white/10" />
             <div className="leading-tight">
               <div className="text-[13px] font-bold tracking-[0.06em]">RYACHA</div>
-              <div className="text-[11px] text-faint">workflow de montage</div>
+              <div className={`text-[11px] ${trial ? 'font-semibold text-warn' : 'text-faint'}`}>{trial ? 'mode essai' : 'workflow de montage'}</div>
             </div>
           </div>
           <nav className="no-drag flex flex-col gap-0.5">

@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('kit', {
   },
   premiere: { status: call('premiere:status'), install: call('premiere:install') },
   version: call('app:version'),
+  trial: call('app:trial'),
   update: {
     check: call('update:check'),
     install: call('update:install'),
