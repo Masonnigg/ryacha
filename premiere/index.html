@@ -37,6 +37,8 @@
     .context { margin:8px 0 14px; padding-bottom:12px; border-bottom:1px solid var(--edge-soft); }
     .context .project { font-size:15px; font-weight:600; letter-spacing:-.01em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .context .job { color:var(--ink-2); margin-top:1px; }
+    .context .pick { display:block; width:100%; margin:6px 0 2px; }
+    .context .pick[hidden] { display:none; }
 
     /* the four steps */
     ol.steps { list-style:none; margin:0; padding:0; display:grid; grid-template-columns:minmax(0, 1fr); gap:6px; } /* minmax: a long path can't widen the panel */
@@ -147,7 +149,7 @@
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
     </button>
   </header>
-  <div class="context"><div class="project" id="project">…</div><div class="job" id="job">…</div></div>
+  <div class="context"><div class="project" id="project">…</div><select id="jobPick" class="pick" aria-label="Pubs à traiter" hidden></select><div class="job" id="job">…</div></div>
 
   <ol class="steps">
     <li class="step" data-step="1">

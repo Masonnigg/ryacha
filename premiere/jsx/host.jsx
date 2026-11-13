@@ -496,6 +496,24 @@ function pubsBin4x5(path) {
 }
 
 // What step 4 can export: for each ad, is its sequence there, and its 4x5 sequence?
+// For each job ({ id, ads: [[binPath, name]] }): how many of its ads are in the open project. Bins and names only,
+// no sequence lookup: the panel asks at each refresh, for every job RYACHA kept.
+function pubs_presence(list) {
+  try {
+    var bins = {}, counts = {};
+    for (var i = 0; i < list.length; i++) {
+      var n = 0;
+      for (var k = 0; k < list[i].ads.length; k++) {
+        var key = list[i].ads[k][0].join('/');
+        if (!bins.hasOwnProperty(key)) bins[key] = pubsFindBin(list[i].ads[k][0]);
+        if (bins[key] && pubsChild(bins[key], list[i].ads[k][1])) n++;
+      }
+      counts[list[i].id] = n;
+    }
+    return pubsJson({ counts: counts });
+  } catch (e) { return pubsFail(e); }
+}
+
 function pubs_exportInfo(file) {
   try {
     pubsJob = pubsRead(file);

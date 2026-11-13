@@ -822,11 +822,16 @@ ipcMain.handle('ads:readBrief', async (_e, filePath) => {
   return { kind: 'text', text: fs.readFileSync(filePath, 'utf8') };
 });
 // the build job for the Premiere panel (premiere/): a fixed place, even for test builds with their own data folder
+// Every build is kept, one file per script (building it again replaces it): one Premiere project can hold several
+// scripts' ads, and the panel lets the editor go back to any of them. job.json stays the latest, for older panels.
 ipcMain.handle('ads:writeJob', (_e, job) => {
-  const file = path.join(os.homedir(), 'Library', 'Application Support', 'Edit Kit', 'pubs', 'job.json');
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(job, null, 1));
-  return file;
+  const dir = path.join(dataDir(), 'pubs');
+  const name = `${job.script} ${job.title || ''}`.trim().replace(/[^\p{L}\p{N} _-]+/gu, '_').slice(0, 80) || 'pubs';
+  const text = JSON.stringify(job, null, 1);
+  fs.mkdirSync(path.join(dir, 'jobs'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'jobs', `${name}.json`), text);
+  fs.writeFileSync(path.join(dir, 'job.json'), text);
+  return path.join(dir, 'job.json');
 });
 // Pubs timeline: small frames of a rush (64 px high), kept next to the transcripts so the timeline draws them at once.
 // Times are rounded to 0.25 s so neighbouring clips share frames; three ffmpeg at a time, nothing in the journal.

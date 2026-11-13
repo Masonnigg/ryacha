@@ -11,9 +11,15 @@
   const REPO = path.dirname(fs.realpathSync(HERE)); // the panel is linked from the app's code folder
   const lib = require(path.join(HERE, 'lib', 'pubs.cjs'));
   const captionsLib = require(path.join(HERE, 'lib', 'captions.cjs'));
-  const APP_DATA = path.join(os.homedir(), 'Library', 'Application Support', 'Edit Kit');
+  // a trial copy of the panel (trial.json next to it) works on the trial app's data, never on RYACHA's own
+  const TRIAL = (() => { try { return JSON.parse(fs.readFileSync(path.join(HERE, 'trial.json'), 'utf8')); } catch (e) { return null; } })();
+  const MAIN_DATA = path.join(os.homedir(), 'Library', 'Application Support', 'Edit Kit');
+  const APP_DATA = (TRIAL && TRIAL.data) || MAIN_DATA;
   const DATA = path.join(APP_DATA, 'pubs');
-  const JOB = path.join(DATA, 'job.json');
+  // every build RYACHA made, one per script (one project can hold several); job.json = the latest, as older apps wrote
+  const JOBS = path.join(DATA, 'jobs');
+  const LATEST = path.join(DATA, 'job.json');
+  let JOB = LATEST; // the job the four steps work on: the one picked for the open project
   const PARTS = ['hook', 'transi', 'corps'];
   const GROUPS = { hook: 'Accroches', transi: 'Transitions', corps: 'Corps' };
   const $ = (id) => document.getElementById(id);
@@ -144,7 +150,7 @@
   // ---------- tools on this Mac (Premiere starts without the shell's PATH) ----------
   const first = (list) => list.find((p) => { try { return fs.existsSync(p); } catch (e) { return false; } }) || null;
   // the app's tools: where RYACHA says it is (it writes it at each start), else where it is installed by default
-  const RESOURCES = [(() => { try { return JSON.parse(fs.readFileSync(path.join(DATA, 'app.json'), 'utf8')).resources; } catch (e) { return null; } })(), '/Applications/RYACHA.app/Contents/Resources'].filter(Boolean);
+  const RESOURCES = [...[DATA, path.join(MAIN_DATA, 'pubs')].map((d) => { try { return JSON.parse(fs.readFileSync(path.join(d, 'app.json'), 'utf8')).resources; } catch (e) { return null; } }), '/Applications/RYACHA.app/Contents/Resources'].filter(Boolean);
   // the ffmpeg inside RYACHA first (the same on every Mac), Homebrew's only as a last resort
   const ffmpeg = () => first([...RESOURCES.map((r) => `${r}/bin/ffmpeg`), path.join(REPO, 'vendor', process.arch, 'bin', 'ffmpeg'), '/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg']);
   const python = () => first([path.join(APP_DATA, 'engine', '.venv', 'bin', 'python')]);
@@ -255,6 +261,7 @@
   }
 
   function paint() {
+    $('jobPick').disabled = busy; // the job can't change under a running step
     const states = stepStates();
     const auto = states.findIndex((s) => s && !s.done);
     const open = openStep !== null ? openStep : auto < 0 ? 3 : auto;
@@ -382,14 +389,77 @@
     if (!busy) $('captions').disabled = !job || !n;
   }
 
+  // ---------- which job: every build is kept, the editor picks one per project (several scripts can share one) ----------
+  function listJobs() {
+    const out = [];
+    const add = (file) => {
+      try {
+        const j = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (j && Array.isArray(j.sequences) && !out.some((o) => o.job.created === j.created)) out.push({ file, job: j });
+      } catch (e) {}
+    };
+    try { for (const f of fs.readdirSync(JOBS)) if (f.endsWith('.json')) add(path.join(JOBS, f)); } catch (e) {}
+    add(LATEST); // a build from an app older than the jobs folder
+    return out.sort((a, b) => (Date.parse(b.job.created) || 0) - (Date.parse(a.job.created) || 0)); // latest first
+  }
+  const adsOf = (j) => j.sequences.filter((s) => kindOf(s) === 'ad');
+  // how many of each job's ads the open project holds (bins and names only: quick enough for every refresh)
+  async function presence(list) {
+    if (!project || list.length < 2) return {};
+    try {
+      const r = await host('pubs_presence', list.map((o) => ({ id: String(o.job.created), ads: adsOf(o.job).map((s) => [s.bin || [], s.name]) })));
+      return r.error ? {} : r.counts;
+    } catch (e) { return {}; }
+  }
+  const pickKey = () => `ryacha-pick:${project ? project.path : ''}`;
+  // the job picked for this project, unless a newer one was built since: what was just built comes first
+  function pickFor(list) {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(pickKey()) || 'null'); } catch (e) {}
+    const hit = saved && list.find((o) => String(o.job.created) === saved.id);
+    if (hit && !(list[0] && Date.parse(list[0].job.created) > saved.at)) return hit;
+    return list[0] || null;
+  }
+  let pickerSig = '';
+  function paintPicker(list, counts, pick) {
+    const sel = $('jobPick');
+    sel.hidden = list.length < 2;
+    sel.disabled = busy;
+    const sig = JSON.stringify([list.map((o) => o.job.created), counts, pick && pick.job.created, !!project]);
+    if (sig === pickerSig || document.activeElement === sel) return;
+    pickerSig = sig;
+    sel.textContent = '';
+    list.forEach((o, i) => {
+      const n = adsOf(o.job).length, c = counts[String(o.job.created)] || 0;
+      const opt = document.createElement('option');
+      opt.value = String(o.job.created);
+      opt.textContent = `${o.job.script} ${o.job.title || ''}`.trim()
+        + (!project ? '' : c ? ` · ${c}/${n} pubs dans ce projet` : ' · pas dans ce projet')
+        + (i === 0 ? ' · dernière construite' : '');
+      opt.selected = o === pick;
+      sel.append(opt);
+    });
+  }
+  $('jobPick').addEventListener('change', (e) => {
+    try { localStorage.setItem(pickKey(), JSON.stringify({ id: e.target.value, at: Date.now() })); } catch (err) {}
+    refresh();
+  });
+  // a new build while the panel is open: seen at the next look (the files' dates change)
+  const jobsStamp = () => [LATEST, JOBS].map((f) => { try { return fs.statSync(f).mtimeMs; } catch (e) { return 0; } }).join(':');
+  let seenStamp = null;
+
   async function refresh() {
     try {
       const info = await host('pubs_info');
       project = info.error ? null : info;
       $('project').textContent = info.error || info.project;
     } catch (e) { project = null; $('project').textContent = e.message; }
-    let next = null;
-    try { next = JSON.parse(fs.readFileSync(JOB, 'utf8')); } catch (e) {}
+    seenStamp = jobsStamp();
+    const list = listJobs();
+    const pick = pickFor(list);
+    JOB = pick ? pick.file : LATEST;
+    const next = pick ? pick.job : null;
+    paintPicker(list, await presence(list), pick);
     if (!next || !job || next.created !== job.created) { unticked = new Set(); filesOff = new Set(); openStep = null; }
     job = next;
     present = null;
@@ -426,6 +496,7 @@
       const info = await host('pubs_info');
       const now = info.error ? null : info.path;
       if (now !== (project ? project.path : null)) { journal(`projet actif : ${info.project || 'aucun'}`); await refresh(); return true; }
+      if (jobsStamp() !== seenStamp) { await refresh(); return true; } // RYACHA built something new
     } catch (e) {} finally { watching = false; }
     return false;
   }
