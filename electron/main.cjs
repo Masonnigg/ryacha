@@ -71,7 +71,8 @@ handleIpc('report:send', (_e, r) => {
 app.on('render-process-gone', (_e, _wc, d) => { if (d.reason !== 'clean-exit') reporter.message(`Écran fermé : ${d.reason} (code ${d.exitCode})`, 'écran', {}, 'error'); });
 app.on('child-process-gone', (_e, d) => { if (!['clean-exit', 'killed'].includes(d.reason)) reporter.message(`Processus ${d.type} arrêté : ${d.reason} (code ${d.exitCode})`, 'app', {}, 'error'); });
 // The Premiere panel writes its errors next to the job; the app sends them (it has the setting and the network).
-const PANEL_ERRORS = process.env.RYACHA_PANEL_ERRORS || path.join(os.homedir(), 'Library', 'Application Support', 'Edit Kit', 'pubs', 'panel-errors.jsonl');
+// in this app's own data folder (RYACHA's: Edit Kit; a test or trial copy keeps its own panel's errors)
+const PANEL_ERRORS = process.env.RYACHA_PANEL_ERRORS || path.join(dataDir(), 'pubs', 'panel-errors.jsonl');
 function sendPanelErrors() {
   const taken = `${PANEL_ERRORS}.sending`;
   try { fs.renameSync(PANEL_ERRORS, taken); } catch { return; }
@@ -824,15 +825,22 @@ ipcMain.handle('ads:readBrief', async (_e, filePath) => {
 // the build job for the Premiere panel (premiere/): a fixed place, even for test builds with their own data folder
 // Every build is kept, one file per script (building it again replaces it): one Premiere project can hold several
 // scripts' ads, and the panel lets the editor go back to any of them. job.json stays the latest, for older panels.
+// plain letters only: the panel hands this path to Premiere, where accents in paths have gone wrong before
+const jobFileName = (job) => `${`${job.script} ${job.title || ''}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/[^A-Za-z0-9 _-]+/g, '_').slice(0, 80) || 'pubs'}.json`;
 ipcMain.handle('ads:writeJob', (_e, job) => {
   const dir = path.join(dataDir(), 'pubs');
-  // plain letters only: the panel hands this path to Premiere, where accents in paths have gone wrong before
-  const name = `${job.script} ${job.title || ''}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/[^A-Za-z0-9 _-]+/g, '_').slice(0, 80) || 'pubs';
-  const text = JSON.stringify(job, null, 1);
+  const latest = path.join(dir, 'job.json');
   fs.mkdirSync(path.join(dir, 'jobs'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'jobs', `${name}.json`), text);
-  fs.writeFileSync(path.join(dir, 'job.json'), text);
-  return path.join(dir, 'job.json');
+  // the build before this one, made by an app that only wrote job.json: kept too, or it would be lost here
+  try {
+    const prev = JSON.parse(fs.readFileSync(latest, 'utf8'));
+    const keep = prev?.created && prev.created !== job.created && path.join(dir, 'jobs', jobFileName(prev));
+    if (keep && jobFileName(prev) !== jobFileName(job) && !fs.existsSync(keep)) fs.writeFileSync(keep, JSON.stringify(prev, null, 1));
+  } catch {}
+  const text = JSON.stringify(job, null, 1);
+  fs.writeFileSync(path.join(dir, 'jobs', jobFileName(job)), text);
+  fs.writeFileSync(latest, text);
+  return latest;
 });
 // Pubs timeline: small frames of a rush (64 px high), kept next to the transcripts so the timeline draws them at once.
 // Times are rounded to 0.25 s so neighbouring clips share frames; three ffmpeg at a time, nothing in the journal.
