@@ -826,7 +826,8 @@ ipcMain.handle('ads:readBrief', async (_e, filePath) => {
 // scripts' ads, and the panel lets the editor go back to any of them. job.json stays the latest, for older panels.
 ipcMain.handle('ads:writeJob', (_e, job) => {
   const dir = path.join(dataDir(), 'pubs');
-  const name = `${job.script} ${job.title || ''}`.trim().replace(/[^\p{L}\p{N} _-]+/gu, '_').slice(0, 80) || 'pubs';
+  // plain letters only: the panel hands this path to Premiere, where accents in paths have gone wrong before
+  const name = `${job.script} ${job.title || ''}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/[^A-Za-z0-9 _-]+/g, '_').slice(0, 80) || 'pubs';
   const text = JSON.stringify(job, null, 1);
   fs.mkdirSync(path.join(dir, 'jobs'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'jobs', `${name}.json`), text);
