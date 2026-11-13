@@ -299,6 +299,9 @@ function Setup({ job, setJob, scripts, run, onBrief, onFolder, onAnalyse }) {
 // Pubs needs the Premiere panel: say so (with the button) until it is installed.
 function PanelHint() {
   const { st, busy, install } = usePanelStatus();
+  const [trial, setTrial] = useState(false); // the trial launcher: its own panel, RYACHA (essai), is already there
+  useEffect(() => { kit.trial?.().then((t) => setTrial(!!t)).catch(() => {}); }, []);
+  if (trial) return <div className="rounded-lg border border-warn/40 px-4 py-3 text-[12.5px] text-warn">Mode essai : dans Premiere, utilise le panneau Fenêtre › Extensions › RYACHA (essai). Le panneau RYACHA normal ne voit pas ce que tu construis ici.</div>;
   if (!st || st.installed || !st.available) return null;
   return (
     <div className="flex items-center gap-3 rounded-lg border border-line px-4 py-3 text-[12.5px]">
